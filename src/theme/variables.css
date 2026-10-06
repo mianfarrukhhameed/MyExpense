@@ -1,0 +1,39 @@
+/* Ionic Variables and Theming — adaptive iOS / Material defaults */
+
+:root {
+  --ion-color-primary: #3880ff;
+  --ion-color-primary-rgb: 56, 128, 255;
+  --ion-color-primary-contrast: #ffffff;
+  --ion-color-primary-contrast-rgb: 255, 255, 255;
+  --ion-color-primary-shade: #3171e0;
+  --ion-color-primary-tint: #4c8dff;
+
+  --ion-color-success: #2dd36f;
+  --ion-color-warning: #ffc409;
+  --ion-color-danger: #eb445a;
+
+  --app-page-padding: 16px;
+}
+
+body {
+  margin: 0;
+}
+
+.page-section {
+  padding: var(--app-page-padding);
+}
+
+.page-card {
+  margin-bottom: 16px;
+}
+
+.muted {
+  color: var(--ion-color-medium, #92949c);
+  font-size: 0.9rem;
+}
+
+.stat-value {
+  font-size: 1.75rem;
+  font-weight: 600;
+  margin: 4px 0 12px;
+}
