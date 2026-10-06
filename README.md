@@ -2,20 +2,36 @@
 
 Offline-first personal expense tracker PWA (Ionic React + IndexedDB + Supabase).
 
-## Phase 1 (current)
+## Phase 2 (current)
 
-- Vite + React + TypeScript + Ionic React (adaptive iOS / Material)
-- Bottom tabs: Dashboard, Expenses, Settings (`/tabs/...`)
-- IndexedDB local store (`idb`) for expenses, profile, sync queue
-- PWA shell via `vite-plugin-pwa` / Workbox (production builds)
+- Email/password auth via Supabase Auth
+- Auth gate: Login / Register → tabs when signed in
+- Guest local data re-keyed to `auth.user.id` on first login
+- Sync engine flushes `sync_queue` and pulls remote changes (last-write-wins)
+- Hydration restores expenses/profile when local DB is empty
+- Settings: sync status, last sync, pending count, **Sync now**, sign out
+
+## Supabase setup
+
+1. Create a project at [supabase.com](https://supabase.com)
+2. In the SQL editor, run [`supabase/migrations/001_init.sql`](supabase/migrations/001_init.sql)
+3. Copy `.env.example` → `.env` and set:
+
+```bash
+VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
+```
+
+4. Auth → URL configuration: add your local origin (e.g. `http://127.0.0.1:5173`) and later Cloudflare Pages URL
+5. Restart `npm run dev` after changing env
 
 ### Smoke test
 
-1. Open **Settings**
-2. Set a planned budget and tap **Save budget locally**
-3. Tap **Add sample expense**
-4. Confirm items on **Expenses** and counts on **Dashboard**
-5. Refresh the browser — data should remain (IndexedDB)
+1. Register a user (disable email confirm in Auth settings for local testing, or confirm the email)
+2. Sign in → tabs load
+3. Settings → set budget, add sample expense, tap **Sync now**
+4. Confirm rows in Supabase Table Editor (`expenses`, `profiles`)
+5. Sign out on another browser/profile, sign in → data hydrates
 
 ## Scripts
 
@@ -28,4 +44,4 @@ npm run preview
 
 ## Environment
 
-Copy `.env.example` to `.env` when starting Phase 2 (Supabase) / Phase 5 (FCM).
+See `.env.example` for Supabase (Phase 2) and FCM (Phase 5) placeholders.

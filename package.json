@@ -12,6 +12,7 @@
   "dependencies": {
     "@ionic/react": "^9.0.6",
     "@ionic/react-router": "^9.0.6",
+    "@supabase/supabase-js": "^2.117.2",
     "idb": "^8.0.4",
     "ionicons": "^8.1.0",
     "react": "^19.2.8",

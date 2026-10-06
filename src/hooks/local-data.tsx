@@ -25,6 +25,7 @@ import {
   countPendingSyncItems,
   enqueueSyncItem,
 } from '../db/sync-queue.repo'
+import { flushQueue } from '../services/sync/sync-engine'
 
 export interface AddExpenseInput {
   amount: number
@@ -107,6 +108,7 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
         payload: expense,
       })
       await refresh()
+      if (navigator.onLine) void flushQueue()
       return expense
     },
     [refresh],
@@ -121,6 +123,7 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
         payload: { id },
       })
       await refresh()
+      if (navigator.onLine) void flushQueue()
     },
     [refresh],
   )
@@ -134,6 +137,7 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
         payload: updated,
       })
       await refresh()
+      if (navigator.onLine) void flushQueue()
       return updated
     },
     [refresh],
@@ -154,6 +158,7 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
         payload: updated,
       })
       await refresh()
+      if (navigator.onLine) void flushQueue()
       return updated
     },
     [refresh],
