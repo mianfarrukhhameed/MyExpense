@@ -6,6 +6,10 @@ import {
   removeExpense,
   upsertExpense,
 } from '../../db/expenses.repo'
+import {
+  deleteReceiptBlob,
+  getReceiptBlob,
+} from '../../db/receipts.repo'
 import { getProfile, upsertProfile } from '../../db/profile.repo'
 import {
   listPendingSyncItems,
@@ -18,6 +22,7 @@ import {
 } from '../../db/sync-meta'
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase/client'
 import { getUser } from '../../lib/supabase/auth'
+import { uploadReceipt } from '../storage/receipts'
 
 type RemoteExpense = {
   id: string
@@ -83,12 +88,52 @@ async function flushExpenseCreateOrUpdate(
   })
 }
 
-async function flushExpenseDelete(id: string): Promise<void> {
+async function flushExpenseDelete(
+  id: string,
+  receiptUrl?: string | null,
+): Promise<void> {
   const { error } = await getSupabase().from('expenses').delete().eq('id', id)
   if (error) throw error
+
+  if (receiptUrl) {
+    await getSupabase().storage.from('receipts').remove([receiptUrl])
+  }
+
   // Local row may already be gone
   const local = await getExpenseById(id)
   if (local) await removeExpense(id)
+}
+
+async function flushReceiptUpload(
+  expenseId: string,
+  blobKey: string,
+  userId: string,
+): Promise<void> {
+  const blob = await getReceiptBlob(blobKey)
+  if (!blob) {
+    // Blob already cleared — treat as success
+    return
+  }
+
+  const path = await uploadReceipt(userId, expenseId, blob)
+  const expense = await getExpenseById(expenseId)
+  if (expense) {
+    const updated: Expense = {
+      ...expense,
+      user_id: userId,
+      receipt_url: path,
+      local_receipt_blob_key: null,
+      updated_at: new Date().toISOString(),
+      sync_status: 'synced',
+    }
+    await upsertExpense(updated)
+    const { error } = await getSupabase()
+      .from('expenses')
+      .upsert(toRemoteExpense(updated, userId))
+    if (error) throw error
+  }
+
+  await deleteReceiptBlob(blobKey)
 }
 
 async function flushProfile(profile: Profile, userId: string): Promise<void> {
@@ -126,8 +171,8 @@ export async function flushQueue(): Promise<{ flushed: number; errors: string[] 
     try {
       if (item.entity === 'expense') {
         if (item.operation === 'delete') {
-          const id = (item.payload as { id: string }).id
-          await flushExpenseDelete(id)
+          const payload = item.payload as { id: string; receipt_url?: string | null }
+          await flushExpenseDelete(payload.id, payload.receipt_url)
         } else {
           const expense = item.payload as Expense
           await flushExpenseCreateOrUpdate(expense, user.id)
@@ -135,8 +180,10 @@ export async function flushQueue(): Promise<{ flushed: number; errors: string[] 
       } else if (item.entity === 'profile') {
         const profile = item.payload as Profile
         await flushProfile(profile, user.id)
+      } else if (item.entity === 'receipt') {
+        const payload = item.payload as { expenseId: string; blobKey: string }
+        await flushReceiptUpload(payload.expenseId, payload.blobKey, user.id)
       }
-      // receipt uploads handled in Phase 3
       await removeSyncItem(item.id)
       flushed += 1
     } catch (err) {

@@ -286,8 +286,8 @@ export default function SettingsPage() {
             </IonButton>
             <IonText color="medium">
               <p className="muted ion-margin-top">
-                Writes go to IndexedDB first; Sync now / online flush pushes to
-                Supabase.
+                Prefer the Expenses tab for logging. Sample write still goes to
+                IndexedDB first; Sync now / online flush pushes to Supabase.
               </p>
             </IonText>
           </IonCardContent>

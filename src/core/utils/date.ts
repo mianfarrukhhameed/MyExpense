@@ -24,3 +24,22 @@ export function daysRemainingInMonth(date = new Date()): number {
   const total = daysInMonth(date.getFullYear(), date.getMonth())
   return Math.max(0, total - date.getDate() + 1)
 }
+
+/** Human label for a YYYY-MM-DD key (Today / Yesterday / locale date). */
+export function formatDayLabel(dateKey: string): string {
+  const today = toDateKey()
+  if (dateKey === today) return 'Today'
+
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (dateKey === toDateKey(yesterday)) return 'Yesterday'
+
+  const [y, m, d] = dateKey.split('-').map(Number)
+  if (!y || !m || !d) return dateKey
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}

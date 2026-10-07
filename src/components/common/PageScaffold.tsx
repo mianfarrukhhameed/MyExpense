@@ -11,12 +11,14 @@ interface PageScaffoldProps {
   title: string
   children: ReactNode
   fullscreen?: boolean
+  fab?: ReactNode
 }
 
 export function PageScaffold({
   title,
   children,
   fullscreen = true,
+  fab,
 }: PageScaffoldProps) {
   return (
     <IonPage>
@@ -33,6 +35,7 @@ export function PageScaffold({
         </IonHeader>
         {children}
       </IonContent>
+      {fab}
     </IonPage>
   )
 }

@@ -12,10 +12,15 @@ import type { Profile } from '../core/types/profile'
 import { toDateKey } from '../core/utils/date'
 import {
   countExpenses,
+  getExpenseById,
   listExpenses,
   removeExpense,
   upsertExpense,
 } from '../db/expenses.repo'
+import {
+  deleteReceiptBlob,
+  putReceiptBlob,
+} from '../db/receipts.repo'
 import {
   getProfile,
   updateMonthlyBudget,
@@ -25,6 +30,7 @@ import {
   countPendingSyncItems,
   enqueueSyncItem,
 } from '../db/sync-queue.repo'
+import { compressImage } from '../services/storage/receipts'
 import { flushQueue } from '../services/sync/sync-engine'
 
 export interface AddExpenseInput {
@@ -32,6 +38,16 @@ export interface AddExpenseInput {
   category: ExpenseCategory | string
   description?: string | null
   date?: string
+  receiptFile?: File | Blob | null
+}
+
+export interface UpdateExpenseInput {
+  amount: number
+  category: ExpenseCategory | string
+  description?: string | null
+  date: string
+  receiptFile?: File | Blob | null
+  clearReceipt?: boolean
 }
 
 interface LocalDataContextValue {
@@ -43,12 +59,31 @@ interface LocalDataContextValue {
   error: string | null
   refresh: () => Promise<void>
   addExpense: (input: AddExpenseInput) => Promise<Expense>
+  updateExpense: (id: string, input: UpdateExpenseInput) => Promise<Expense>
   deleteExpense: (id: string) => Promise<void>
   setBudget: (amount: number) => Promise<Profile>
   setCurrency: (currency: string) => Promise<Profile>
 }
 
 const LocalDataContext = createContext<LocalDataContextValue | null>(null)
+
+async function storeReceiptBlob(
+  expenseId: string,
+  file: File | Blob,
+): Promise<string> {
+  const compressed = await compressImage(file)
+  const blobKey = expenseId
+  await putReceiptBlob(blobKey, compressed)
+  return blobKey
+}
+
+async function enqueueReceiptUpload(expenseId: string, blobKey: string) {
+  await enqueueSyncItem({
+    entity: 'receipt',
+    operation: 'create',
+    payload: { expenseId, blobKey },
+  })
+}
 
 export function LocalDataProvider({ children }: { children: ReactNode }) {
   const [expenses, setExpenses] = useState<Expense[]>([])
@@ -87,15 +122,22 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
     async (input: AddExpenseInput) => {
       const currentProfile = await getProfile()
       const now = new Date().toISOString()
+      const id = crypto.randomUUID()
+
+      let localReceiptKey: string | null = null
+      if (input.receiptFile) {
+        localReceiptKey = await storeReceiptBlob(id, input.receiptFile)
+      }
+
       const expense: Expense = {
-        id: crypto.randomUUID(),
+        id,
         user_id: currentProfile.id,
         amount: input.amount,
         category: input.category,
         description: input.description ?? null,
         date: input.date ?? toDateKey(),
         receipt_url: null,
-        local_receipt_blob_key: null,
+        local_receipt_blob_key: localReceiptKey,
         created_at: now,
         updated_at: now,
         sync_status: 'pending',
@@ -107,6 +149,59 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
         operation: 'create',
         payload: expense,
       })
+      if (localReceiptKey) {
+        await enqueueReceiptUpload(id, localReceiptKey)
+      }
+      await refresh()
+      if (navigator.onLine) void flushQueue()
+      return expense
+    },
+    [refresh],
+  )
+
+  const updateExpense = useCallback(
+    async (id: string, input: UpdateExpenseInput) => {
+      const existing = await getExpenseById(id)
+      if (!existing) throw new Error('Expense not found')
+
+      let localReceiptKey = existing.local_receipt_blob_key ?? null
+      let receiptUrl = existing.receipt_url
+
+      if (input.clearReceipt) {
+        if (localReceiptKey) await deleteReceiptBlob(localReceiptKey)
+        localReceiptKey = null
+        receiptUrl = null
+      }
+
+      let newReceipt = false
+      if (input.receiptFile) {
+        if (localReceiptKey) await deleteReceiptBlob(localReceiptKey)
+        localReceiptKey = await storeReceiptBlob(id, input.receiptFile)
+        receiptUrl = null
+        newReceipt = true
+      }
+
+      const expense: Expense = {
+        ...existing,
+        amount: input.amount,
+        category: input.category,
+        description: input.description ?? null,
+        date: input.date,
+        receipt_url: receiptUrl,
+        local_receipt_blob_key: localReceiptKey,
+        updated_at: new Date().toISOString(),
+        sync_status: 'pending',
+      }
+
+      await upsertExpense(expense)
+      await enqueueSyncItem({
+        entity: 'expense',
+        operation: 'update',
+        payload: expense,
+      })
+      if (newReceipt && localReceiptKey) {
+        await enqueueReceiptUpload(id, localReceiptKey)
+      }
       await refresh()
       if (navigator.onLine) void flushQueue()
       return expense
@@ -116,11 +211,15 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
 
   const deleteExpense = useCallback(
     async (id: string) => {
+      const existing = await getExpenseById(id)
+      if (existing?.local_receipt_blob_key) {
+        await deleteReceiptBlob(existing.local_receipt_blob_key)
+      }
       await removeExpense(id)
       await enqueueSyncItem({
         entity: 'expense',
         operation: 'delete',
-        payload: { id },
+        payload: { id, receipt_url: existing?.receipt_url ?? null },
       })
       await refresh()
       if (navigator.onLine) void flushQueue()
@@ -174,6 +273,7 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
       error,
       refresh,
       addExpense,
+      updateExpense,
       deleteExpense,
       setBudget,
       setCurrency,
@@ -187,6 +287,7 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
       error,
       refresh,
       addExpense,
+      updateExpense,
       deleteExpense,
       setBudget,
       setCurrency,
@@ -206,7 +307,7 @@ function useLocalData(): LocalDataContextValue {
   return ctx
 }
 
-/** Phase 1 hook API — shared context so every tab sees the same IndexedDB state. */
+/** Shared context so every tab sees the same IndexedDB state. */
 export function useExpenses() {
   const {
     expenses,
@@ -215,6 +316,7 @@ export function useExpenses() {
     error,
     refresh,
     addExpense,
+    updateExpense,
     deleteExpense,
   } = useLocalData()
 
@@ -225,6 +327,7 @@ export function useExpenses() {
     error,
     refresh,
     addExpense,
+    updateExpense,
     deleteExpense,
   }
 }
