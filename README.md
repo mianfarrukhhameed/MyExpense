@@ -2,7 +2,19 @@
 
 Offline-first personal expense tracker PWA (Ionic React + IndexedDB + Supabase).
 
-## Phase 2 (current)
+## Implemented so far
+
+### Phase 1 — Scaffold and offline database
+
+- Vite + React + TypeScript + Ionic React (adaptive iOS / Material)
+- Bottom tabs: Dashboard, Expenses, Settings (`/tabs/...`)
+- IndexedDB (`myexpense` v1): `expenses`, `profile`, `sync_queue`, `receipt_blobs`
+- Local CRUD via repos + shared local-data context (tabs stay in sync)
+- Settings smoke UI: set budget, add sample expense, show queue count
+- PWA shell via `vite-plugin-pwa` / Workbox (production builds)
+- Sync/hydration stubs (replaced in Phase 2)
+
+### Phase 2 — Auth and Supabase sync (current)
 
 - Email/password auth via Supabase Auth
 - Auth gate: Login / Register → tabs when signed in
@@ -11,7 +23,7 @@ Offline-first personal expense tracker PWA (Ionic React + IndexedDB + Supabase).
 - Hydration restores expenses/profile when local DB is empty
 - Settings: sync status, last sync, pending count, **Sync now**, sign out
 
-## Supabase setup
+## Supabase setup (Phase 2)
 
 1. Create a project at [supabase.com](https://supabase.com)
 2. In the SQL editor, run [`supabase/migrations/001_init.sql`](supabase/migrations/001_init.sql)
@@ -25,13 +37,23 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 4. Auth → URL configuration: add your local origin (e.g. `http://127.0.0.1:5173`) and later Cloudflare Pages URL
 5. Restart `npm run dev` after changing env
 
-### Smoke test
+## Smoke tests
+
+### Phase 1 (local / IndexedDB)
+
+1. Sign in (or use after Phase 2 auth is configured)
+2. Open **Settings** → set a planned budget → **Save budget locally**
+3. Tap **Add sample expense**
+4. Confirm items on **Expenses** and counts on **Dashboard**
+5. Refresh the browser — data should remain (IndexedDB)
+
+### Phase 2 (auth + sync)
 
 1. Register a user (disable email confirm in Auth settings for local testing, or confirm the email)
 2. Sign in → tabs load
 3. Settings → set budget, add sample expense, tap **Sync now**
 4. Confirm rows in Supabase Table Editor (`expenses`, `profiles`)
-5. Sign out on another browser/profile, sign in → data hydrates
+5. Wipe site data (or another browser) → sign in again → hydration restores expenses
 
 ## Scripts
 
