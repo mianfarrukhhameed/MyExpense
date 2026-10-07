@@ -13,6 +13,7 @@ import {
   IonSelect,
   IonSelectOption,
   IonText,
+  IonToggle,
   useIonToast,
 } from '@ionic/react'
 import { useState } from 'react'
@@ -23,6 +24,12 @@ import { platformLabel } from '../core/utils/platform'
 import { useAuth } from '../hooks/useAuth'
 import { useExpenses } from '../hooks/useExpenses'
 import { useProfile } from '../hooks/useProfile'
+import {
+  disableDailyReminder,
+  enableDailyReminder,
+  getDailyReminderPref,
+  isFcmConfigured,
+} from '../push/fcm'
 import { syncNow } from '../services/sync/sync-engine'
 
 function formatSyncTime(iso: string | null): string {
@@ -41,11 +48,13 @@ export default function SettingsPage() {
   const { addExpense, count, refresh: refreshExpenses } = useExpenses()
   const [budgetInput, setBudgetInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const [reminderOn, setReminderOn] = useState(() => getDailyReminderPref())
   const [lastSync, setLastSync] = useState<string | null>(() => getLastSyncAt())
   const [present] = useIonToast()
 
   const currency = profile?.currency ?? 'USD'
   const online = typeof navigator !== 'undefined' ? navigator.onLine : true
+  const fcmReady = isFcmConfigured()
 
   const handleSaveBudget = async () => {
     const amount = Number.parseFloat(budgetInput)
@@ -127,6 +136,39 @@ export default function SettingsPage() {
     setBusy(true)
     try {
       await logOut()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleReminderToggle = async (enabled: boolean) => {
+    setBusy(true)
+    try {
+      if (enabled) {
+        await enableDailyReminder()
+        setReminderOn(true)
+        await present({
+          message: 'Daily reminder enabled',
+          duration: 2000,
+          color: 'success',
+        })
+      } else {
+        await disableDailyReminder()
+        setReminderOn(false)
+        await present({
+          message: 'Daily reminder disabled',
+          duration: 2000,
+          color: 'medium',
+        })
+      }
+      await refresh()
+    } catch (err) {
+      setReminderOn(getDailyReminderPref())
+      await present({
+        message: err instanceof Error ? err.message : 'Reminder update failed',
+        duration: 3000,
+        color: 'danger',
+      })
     } finally {
       setBusy(false)
     }
@@ -303,6 +345,37 @@ export default function SettingsPage() {
                 ))}
               </IonSelect>
             </IonItem>
+          </IonCardContent>
+        </IonCard>
+
+        <IonCard className="page-card">
+          <IonCardHeader>
+            <IonCardSubtitle>Notifications</IonCardSubtitle>
+            <IonCardTitle>Daily expense reminder</IonCardTitle>
+          </IonCardHeader>
+          <IonCardContent>
+            <IonItem lines="none">
+              <IonToggle
+                checked={reminderOn}
+                disabled={busy || !fcmReady}
+                onIonChange={(event) =>
+                  void handleReminderToggle(event.detail.checked)
+                }
+              >
+                Remind me to log expenses
+              </IonToggle>
+            </IonItem>
+            {!fcmReady ? (
+              <IonNote color="medium">
+                Set `VITE_FIREBASE_*` in `.env` to enable FCM. iOS needs Add to
+                Home Screen (16.4+).
+              </IonNote>
+            ) : (
+              <IonNote color="medium">
+                Token is stored on your profile and can be targeted by the
+                Cloudflare Worker stub in `workers/daily-reminder/`.
+              </IonNote>
+            )}
           </IonCardContent>
         </IonCard>
 

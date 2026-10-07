@@ -1,16 +1,23 @@
 import { IonApp, IonRouterOutlet, IonSpinner, setupIonicReact } from '@ionic/react'
 import { IonReactRouter } from '@ionic/react-router'
+import { useEffect } from 'react'
 import { Navigate, Route } from 'react-router-dom'
+import { InstallPrompt } from './components/pwa/InstallPrompt'
 import { AuthProvider, useAuth } from './hooks/useAuth'
 import { LocalDataProvider } from './hooks/local-data'
 import LoginPage from './pages/auth/LoginPage'
 import RegisterPage from './pages/auth/RegisterPage'
 import TabsLayout from './pages/tabs/TabsLayout'
+import { startReplaySyncListener } from './services/pwa/replay-sync'
 
 setupIonicReact()
 
 function AppRoutes() {
   const { user, loading } = useAuth()
+
+  useEffect(() => {
+    startReplaySyncListener()
+  }, [])
 
   if (loading) {
     return (
@@ -39,6 +46,7 @@ function AppRoutes() {
   return (
     <LocalDataProvider>
       <TabsLayout />
+      <InstallPrompt />
     </LocalDataProvider>
   )
 }

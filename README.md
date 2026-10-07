@@ -10,72 +10,62 @@ Offline-first personal expense tracker PWA (Ionic React + IndexedDB + Supabase).
 - Bottom tabs: Dashboard, Expenses, Settings (`/tabs/...`)
 - IndexedDB (`myexpense` v1): `expenses`, `profile`, `sync_queue`, `receipt_blobs`
 - Local CRUD via repos + shared local-data context (tabs stay in sync)
-- Settings smoke UI: set budget, add sample expense, show queue count
-- PWA shell via `vite-plugin-pwa` / Workbox (production builds)
+- PWA shell via `vite-plugin-pwa` / Workbox
 
 ### Phase 2 — Auth and Supabase sync
 
 - Email/password auth via Supabase Auth
-- Auth gate: Login / Register → tabs when signed in
-- Guest local data re-keyed to `auth.user.id` on first login
-- Sync engine flushes `sync_queue` and pulls remote changes (last-write-wins)
-- Hydration restores expenses/profile when local DB is empty
-- Settings: sync status, last sync, pending count, **Sync now**, sign out
+- Auth gate + guest re-key + sync engine flush/pull + hydration
+- Settings: sync status, **Sync now**, sign out
 
 ### Phase 3 — Expense logging and receipts
 
-- FAB + modal form: amount, category, date, description, optional receipt photo
-- Day-grouped expense list with swipe-to-delete and tap-to-edit
-- Client-side JPEG compress → IndexedDB blob → Supabase Storage upload on sync
-- Receipt thumbnails + full-screen preview modal
+- FAB form, day-grouped list, swipe delete, edit
+- Compressed receipts → IndexedDB → Supabase Storage on sync
 
-### Phase 4 — Dashboard, budget analytics, and charts (current)
+### Phase 4 — Dashboard and charts
 
-- Current-month planned / spent / remaining with progress meter
-- Burn-rate pacing (actual vs allowed daily rate + projected month-end)
-- Recharts 12-month spend comparison with highest-month alert
-- Settings: budget + currency; Dashboard links to Settings
+- Budget meter, burn-rate pacing, Recharts 12-month comparison
+- Settings: budget + currency
 
-## Supabase setup (Phase 2+)
+### Phase 5 — PWA hardening and FCM (current)
+
+- Workbox: app shell + NetworkFirst for Supabase REST GETs
+- Background Sync tag `replay-sync` → client flushes IndexedDB `sync_queue` (single source of truth)
+- `InstallPrompt`: Android `beforeinstallprompt` sheet; iOS Share → Add to Home Screen tip
+- FCM: Settings **Daily expense reminder** stores `profiles.fcm_token`
+- Migration [`002_fcm_token.sql`](supabase/migrations/002_fcm_token.sql)
+- Cloudflare Worker cron stub: [`workers/daily-reminder/`](workers/daily-reminder/)
+
+## Supabase setup
 
 1. Create a project at [supabase.com](https://supabase.com)
-2. In the SQL editor, run [`supabase/migrations/001_init.sql`](supabase/migrations/001_init.sql)
-3. Copy `.env.example` → `.env` and set:
-
-```bash
-VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
-```
-
-4. Auth → URL configuration: add your local origin (e.g. `http://127.0.0.1:5173`) and later Cloudflare Pages URL
+2. Run [`001_init.sql`](supabase/migrations/001_init.sql) then [`002_fcm_token.sql`](supabase/migrations/002_fcm_token.sql)
+3. Copy `.env.example` → `.env` and set Supabase (+ optional Firebase) keys
+4. Auth → URL configuration: local origin and Cloudflare Pages HTTPS origin
 5. Restart `npm run dev` after changing env
+
+## Firebase / reminders (Phase 5)
+
+1. Create a Firebase web app; enable Cloud Messaging; create a VAPID key
+2. Fill `VITE_FIREBASE_*` in `.env`
+3. Enable reminder in Settings → grant permission → token on `profiles.fcm_token`
+4. Test via Firebase Console, or deploy `workers/daily-reminder` (see its README)
+
+**iOS:** install to Home Screen (16.4+) for reliable web push.
 
 ## Smoke tests
 
-### Phase 1 (local / IndexedDB)
+### Phases 1–4
 
-1. Sign in → **Settings** → set budget → **Save budget locally**
-2. Add an expense (Expenses FAB or sample button)
-3. Confirm data survives refresh (IndexedDB)
+See earlier phase notes: local CRUD, auth/sync, expenses/receipts, dashboard math.
 
-### Phase 2 (auth + sync)
+### Phase 5
 
-1. Register / sign in → tabs load
-2. Settings → Sync now → rows in Supabase `expenses` / `profiles`
-3. Wipe site data → sign in → hydration restores expenses
-
-### Phase 3 (expenses + receipts)
-
-1. Expenses → **+** → save with optional receipt
-2. Edit / swipe-delete; thumbnail preview
-3. Sync now → Storage object + `receipt_url`
-
-### Phase 4 (dashboard)
-
-1. Set budget 500; add known expenses this month → spent/remaining/progress match
-2. Front-load spend → burn-rate warning when projected over budget
-3. Prior-month expenses → chart bars + highest-month alert
-4. Airplane mode → Dashboard still computes from IndexedDB
+1. `npm run build && npm run preview` → offline shell loads after first visit
+2. Queue an expense offline → go online → sync (app `online` and/or SW `replay-sync`)
+3. Android Chrome: install CTA; iOS Safari (not standalone): Share instructions
+4. Enable reminder with Firebase env → `fcm_token` set; send test message
 
 ## Scripts
 
@@ -86,6 +76,10 @@ npm run build
 npm run preview
 ```
 
+## Deploy
+
+Cloudflare Pages after Phase 5 (or earlier for sync-only). Allowlist the Pages origin in Supabase Auth.
+
 ## Environment
 
-See `.env.example` for Supabase (Phase 2) and FCM (Phase 5) placeholders.
+See `.env.example` for Supabase and FCM placeholders. Never commit service-role or FCM private keys.

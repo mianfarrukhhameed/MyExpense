@@ -5,13 +5,18 @@ import { VitePWA } from 'vite-plugin-pwa'
 // https://vite.dev/config/
 export default defineConfig({
   build: {
-    chunkSizeWarningLimit: 1600,
+    chunkSizeWarningLimit: 2200,
   },
   plugins: [
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
+      includeAssets: [
+        'favicon.svg',
+        'apple-touch-icon.png',
+        'sw-messages.js',
+        'firebase-messaging-sw.js',
+      ],
       manifest: {
         name: 'MyExpense',
         short_name: 'MyExpense',
@@ -43,7 +48,27 @@ export default defineConfig({
       workbox: {
         navigateFallback: 'index.html',
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-        // Phase 5: add workbox-background-sync for failed Supabase mutations
+        importScripts: ['sw-messages.js'],
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) =>
+              url.hostname.endsWith('supabase.co') &&
+              url.pathname.includes('/rest/v1/'),
+            handler: 'NetworkFirst',
+            method: 'GET',
+            options: {
+              cacheName: 'supabase-rest-get',
+              networkTimeoutSeconds: 8,
+              expiration: {
+                maxEntries: 64,
+                maxAgeSeconds: 60 * 60 * 24,
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
+        ],
       },
       devOptions: {
         enabled: false,

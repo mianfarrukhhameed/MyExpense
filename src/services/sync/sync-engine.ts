@@ -22,6 +22,7 @@ import {
 } from '../../db/sync-meta'
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase/client'
 import { getUser } from '../../lib/supabase/auth'
+import { requestReplaySync } from '../pwa/replay-sync'
 import { uploadReceipt } from '../storage/receipts'
 
 type RemoteExpense = {
@@ -40,6 +41,7 @@ type RemoteProfile = {
   id: string
   monthly_budget: number
   currency: string
+  fcm_token?: string | null
   updated_at: string
 }
 
@@ -141,6 +143,7 @@ async function flushProfile(profile: Profile, userId: string): Promise<void> {
     id: userId,
     monthly_budget: profile.monthly_budget,
     currency: profile.currency,
+    fcm_token: profile.fcm_token ?? null,
     updated_at: profile.updated_at,
   }
   const { error } = await getSupabase().from('profiles').upsert(payload)
@@ -195,6 +198,10 @@ export async function flushQueue(): Promise<{ flushed: number; errors: string[] 
 
   if (flushed > 0) {
     setLastSyncAt(new Date().toISOString())
+  }
+
+  if (errors.length > 0) {
+    void requestReplaySync()
   }
 
   return { flushed, errors }
@@ -252,6 +259,7 @@ export async function pullRemoteChanges(): Promise<{ pulled: number }> {
         id: remote.id,
         monthly_budget: Number(remote.monthly_budget),
         currency: remote.currency,
+        fcm_token: remote.fcm_token ?? null,
         updated_at: remote.updated_at,
         sync_status: 'synced',
       })
@@ -298,6 +306,7 @@ export async function ensureRemoteProfile(userId: string): Promise<void> {
     id: userId,
     monthly_budget: local.monthly_budget,
     currency: local.currency,
+    fcm_token: local.fcm_token ?? null,
     updated_at: local.updated_at,
   })
   if (error) throw error
