@@ -94,3 +94,41 @@ body {
   max-height: 90vh;
   object-fit: contain;
 }
+
+.budget-meter-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.budget-meter-row .stat-value {
+  font-size: 1.15rem;
+  margin: 0;
+}
+
+.stat-danger {
+  color: var(--ion-color-danger, #eb445a);
+}
+
+.budget-progress {
+  height: 8px;
+  border-radius: 4px;
+}
+
+.burn-rate-title {
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.overspend-alert {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 196, 9, 0.12);
+}
+
+.month-chart-canvas {
+  width: 100%;
+  min-height: 220px;
+}

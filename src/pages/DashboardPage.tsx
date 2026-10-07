@@ -1,31 +1,51 @@
 import {
+  IonButton,
   IonCard,
   IonCardContent,
   IonCardHeader,
   IonCardSubtitle,
   IonCardTitle,
   IonNote,
-  IonText,
 } from '@ionic/react'
+import { useMemo } from 'react'
+import { BudgetMeter } from '../components/dashboard/BudgetMeter'
+import { BurnRateIndicator } from '../components/dashboard/BurnRateIndicator'
+import { MonthCompareChart } from '../components/dashboard/MonthCompareChart'
 import { PageScaffold } from '../components/common/PageScaffold'
-import { formatMoney } from '../core/utils/money'
+import {
+  monthTotals,
+  summarizeBurnRate,
+  summarizeMonthBudget,
+} from '../core/utils/budget'
+import { toMonthKey } from '../core/utils/date'
 import { useExpenses } from '../hooks/useExpenses'
 import { useProfile } from '../hooks/useProfile'
 
 export default function DashboardPage() {
-  const { count, loading: expensesLoading } = useExpenses()
+  const { expenses, loading: expensesLoading } = useExpenses()
   const { profile, loading: profileLoading } = useProfile()
 
   const loading = expensesLoading || profileLoading
   const currency = profile?.currency ?? 'USD'
   const budget = profile?.monthly_budget ?? 0
+  const monthKey = toMonthKey()
+
+  const summary = useMemo(
+    () => summarizeMonthBudget(expenses, budget, monthKey),
+    [expenses, budget, monthKey],
+  )
+  const burn = useMemo(
+    () => summarizeBurnRate(summary.spent, budget),
+    [summary.spent, budget],
+  )
+  const months = useMemo(() => monthTotals(expenses, 12), [expenses])
 
   return (
     <PageScaffold title="Dashboard">
       <div className="page-section">
         <IonCard className="page-card">
           <IonCardHeader>
-            <IonCardSubtitle>Current month</IonCardSubtitle>
+            <IonCardSubtitle>{monthKey}</IonCardSubtitle>
             <IonCardTitle>Budget overview</IonCardTitle>
           </IonCardHeader>
           <IonCardContent>
@@ -33,18 +53,48 @@ export default function DashboardPage() {
               <IonNote>Loading local data…</IonNote>
             ) : (
               <>
-                <IonText color="medium">
-                  <p className="muted">Planned budget</p>
-                </IonText>
-                <div className="stat-value">{formatMoney(budget, currency)}</div>
-                <IonText color="medium">
-                  <p className="muted">Local expenses stored</p>
-                </IonText>
-                <div className="stat-value">{count}</div>
-                <IonNote>
-                  Charts, burn rate, and remaining budget arrive in Phase 4.
-                </IonNote>
+                <BudgetMeter summary={summary} currency={currency} />
+                <IonButton
+                  routerLink="/tabs/settings"
+                  fill="clear"
+                  size="small"
+                  className="ion-margin-top"
+                >
+                  Edit budget in Settings
+                </IonButton>
               </>
+            )}
+          </IonCardContent>
+        </IonCard>
+
+        <IonCard className="page-card">
+          <IonCardHeader>
+            <IonCardSubtitle>Pacing</IonCardSubtitle>
+            <IonCardTitle>Burn rate</IonCardTitle>
+          </IonCardHeader>
+          <IonCardContent>
+            {loading ? (
+              <IonNote>Loading…</IonNote>
+            ) : (
+              <BurnRateIndicator
+                burn={burn}
+                currency={currency}
+                budget={budget}
+              />
+            )}
+          </IonCardContent>
+        </IonCard>
+
+        <IonCard className="page-card">
+          <IonCardHeader>
+            <IonCardSubtitle>Last 12 months</IonCardSubtitle>
+            <IonCardTitle>Spend comparison</IonCardTitle>
+          </IonCardHeader>
+          <IonCardContent>
+            {loading ? (
+              <IonNote>Loading…</IonNote>
+            ) : (
+              <MonthCompareChart months={months} currency={currency} />
             )}
           </IonCardContent>
         </IonCard>

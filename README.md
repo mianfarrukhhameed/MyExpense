@@ -22,12 +22,19 @@ Offline-first personal expense tracker PWA (Ionic React + IndexedDB + Supabase).
 - Hydration restores expenses/profile when local DB is empty
 - Settings: sync status, last sync, pending count, **Sync now**, sign out
 
-### Phase 3 — Expense logging and receipts (current)
+### Phase 3 — Expense logging and receipts
 
 - FAB + modal form: amount, category, date, description, optional receipt photo
 - Day-grouped expense list with swipe-to-delete and tap-to-edit
 - Client-side JPEG compress → IndexedDB blob → Supabase Storage upload on sync
 - Receipt thumbnails + full-screen preview modal
+
+### Phase 4 — Dashboard, budget analytics, and charts (current)
+
+- Current-month planned / spent / remaining with progress meter
+- Burn-rate pacing (actual vs allowed daily rate + projected month-end)
+- Recharts 12-month spend comparison with highest-month alert
+- Settings: budget + currency; Dashboard links to Settings
 
 ## Supabase setup (Phase 2+)
 
@@ -47,27 +54,28 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 
 ### Phase 1 (local / IndexedDB)
 
-1. Sign in (or use after Phase 2 auth is configured)
-2. Open **Settings** → set a planned budget → **Save budget locally**
-3. Tap **Add sample expense** (or use the Expenses FAB)
-4. Confirm items on **Expenses** and counts on **Dashboard**
-5. Refresh the browser — data should remain (IndexedDB)
+1. Sign in → **Settings** → set budget → **Save budget locally**
+2. Add an expense (Expenses FAB or sample button)
+3. Confirm data survives refresh (IndexedDB)
 
 ### Phase 2 (auth + sync)
 
-1. Register a user (disable email confirm in Auth settings for local testing, or confirm the email)
-2. Sign in → tabs load
-3. Settings → set budget, add sample expense, tap **Sync now**
-4. Confirm rows in Supabase Table Editor (`expenses`, `profiles`)
-5. Wipe site data (or another browser) → sign in again → hydration restores expenses
+1. Register / sign in → tabs load
+2. Settings → Sync now → rows in Supabase `expenses` / `profiles`
+3. Wipe site data → sign in → hydration restores expenses
 
 ### Phase 3 (expenses + receipts)
 
-1. Expenses → **+** → amount, category, date → Save
-2. Attach a receipt photo (works offline) → thumbnail appears
-3. Tap row to edit; swipe to delete
-4. Online / Sync now → expense + Storage object; local blob cleared after upload
-5. Tap thumbnail → preview modal
+1. Expenses → **+** → save with optional receipt
+2. Edit / swipe-delete; thumbnail preview
+3. Sync now → Storage object + `receipt_url`
+
+### Phase 4 (dashboard)
+
+1. Set budget 500; add known expenses this month → spent/remaining/progress match
+2. Front-load spend → burn-rate warning when projected over budget
+3. Prior-month expenses → chart bars + highest-month alert
+4. Airplane mode → Dashboard still computes from IndexedDB
 
 ## Scripts
 

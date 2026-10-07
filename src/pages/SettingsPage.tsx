@@ -10,6 +10,8 @@ import {
   IonLabel,
   IonList,
   IonNote,
+  IonSelect,
+  IonSelectOption,
   IonText,
   useIonToast,
 } from '@ionic/react'
@@ -34,7 +36,8 @@ function formatSyncTime(iso: string | null): string {
 
 export default function SettingsPage() {
   const { user, logOut, configured } = useAuth()
-  const { profile, pendingSyncCount, loading, setBudget, refresh } = useProfile()
+  const { profile, pendingSyncCount, loading, setBudget, setCurrency, refresh } =
+    useProfile()
   const { addExpense, count, refresh: refreshExpenses } = useExpenses()
   const [budgetInput, setBudgetInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -269,6 +272,37 @@ export default function SettingsPage() {
             >
               Save budget locally
             </IonButton>
+            <IonItem className="ion-margin-top">
+              <IonSelect
+                label="Currency"
+                labelPlacement="stacked"
+                interface="popover"
+                value={currency}
+                disabled={busy}
+                onIonChange={(event) => {
+                  const next = String(event.detail.value)
+                  void (async () => {
+                    setBusy(true)
+                    try {
+                      await setCurrency(next)
+                      await present({
+                        message: `Currency set to ${next}`,
+                        duration: 1500,
+                        color: 'success',
+                      })
+                    } finally {
+                      setBusy(false)
+                    }
+                  })()
+                }}
+              >
+                {['USD', 'EUR', 'GBP', 'PKR', 'INR', 'AED'].map((code) => (
+                  <IonSelectOption key={code} value={code}>
+                    {code}
+                  </IonSelectOption>
+                ))}
+              </IonSelect>
+            </IonItem>
           </IonCardContent>
         </IonCard>
 
