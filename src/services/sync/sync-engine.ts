@@ -301,6 +301,16 @@ export async function startSyncListeners(): Promise<void> {
 /** Ensure a remote profiles row exists for the signed-in user. */
 export async function ensureRemoteProfile(userId: string): Promise<void> {
   if (!isSupabaseConfigured()) return
+
+  // Never overwrite an existing cloud profile with empty local defaults (e.g. after account switch)
+  const { data: existing, error: readError } = await getSupabase()
+    .from('profiles')
+    .select('id')
+    .eq('id', userId)
+    .maybeSingle()
+  if (readError) throw readError
+  if (existing) return
+
   const local = await getProfile()
   const { error } = await getSupabase().from('profiles').upsert({
     id: userId,

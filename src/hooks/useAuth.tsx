@@ -9,7 +9,10 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { ensureLocalProfileForUser } from '../db/migration.repo'
+import {
+  bindLocalDataToUser,
+  clearLocalWorkspace,
+} from '../db/migration.repo'
 import { enqueueSyncItem } from '../db/sync-queue.repo'
 import {
   getSession,
@@ -19,7 +22,10 @@ import {
   signUp,
 } from '../lib/supabase/auth'
 import { isSupabaseConfigured } from '../lib/supabase/client'
-import { hydrateFromRemoteIfEmpty } from '../services/offline/hydration'
+import {
+  hydrateFromRemote,
+  hydrateFromRemoteIfEmpty,
+} from '../services/offline/hydration'
 import {
   ensureRemoteProfile,
   pushAllLocalExpenses,
@@ -40,15 +46,29 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 async function bootstrapAuthenticatedUser(user: User): Promise<void> {
-  const profile = await ensureLocalProfileForUser(user.id)
-  await ensureRemoteProfile(user.id)
-  await enqueueSyncItem({
-    entity: 'profile',
-    operation: 'update',
-    payload: profile,
-  })
-  await pushAllLocalExpenses(user.id)
-  await hydrateFromRemoteIfEmpty()
+  const { profile, migratedGuest, switchedUser } = await bindLocalDataToUser(
+    user.id,
+  )
+
+  if (switchedUser) {
+    // Different account: local was wiped — load this user's cloud data first
+    await hydrateFromRemote()
+    await ensureRemoteProfile(user.id)
+  } else if (migratedGuest) {
+    // First bind: keep guest writes and push them under this account
+    await ensureRemoteProfile(user.id)
+    await enqueueSyncItem({
+      entity: 'profile',
+      operation: 'update',
+      payload: profile,
+    })
+    await pushAllLocalExpenses(user.id)
+    await hydrateFromRemoteIfEmpty()
+  } else {
+    await ensureRemoteProfile(user.id)
+    await hydrateFromRemoteIfEmpty()
+  }
+
   await syncNow()
   await startSyncListeners()
 }
@@ -133,6 +153,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logOut = useCallback(async () => {
     await signOut()
     bootstrappedUserId.current = null
+    await clearLocalWorkspace()
     setSession(null)
     setUser(null)
   }, [])

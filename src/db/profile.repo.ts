@@ -5,8 +5,7 @@ import {
 import type { Profile } from '../core/types/profile'
 import { getDb } from './index'
 import { STORE_PROFILE } from './schema'
-
-const GUEST_PROFILE_KEY = 'local-guest-profile-id'
+import { GUEST_PROFILE_KEY } from './workspace'
 
 function createGuestProfile(): Profile {
   const now = new Date().toISOString()
