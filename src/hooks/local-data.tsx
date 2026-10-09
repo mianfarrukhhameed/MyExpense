@@ -26,6 +26,7 @@ import {
   updateMonthlyBudget,
   upsertProfile,
 } from '../db/profile.repo'
+import { DATA_SYNCED_EVENT } from '../db/sync-meta'
 import {
   countPendingSyncItems,
   enqueueSyncItem,
@@ -116,6 +117,14 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refresh()
+  }, [refresh])
+
+  useEffect(() => {
+    const onSynced = () => {
+      void refresh()
+    }
+    window.addEventListener(DATA_SYNCED_EVENT, onSynced)
+    return () => window.removeEventListener(DATA_SYNCED_EVENT, onSynced)
   }, [refresh])
 
   const addExpense = useCallback(

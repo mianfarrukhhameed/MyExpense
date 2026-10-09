@@ -17,8 +17,10 @@ import {
 } from '../../db/sync-queue.repo'
 import {
   getLastPullAt,
+  notifyDataSynced,
   setLastPullAt,
   setLastSyncAt,
+  shouldSyncOnResume,
 } from '../../db/sync-meta'
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase/client'
 import { getUser } from '../../lib/supabase/auth'
@@ -279,7 +281,30 @@ export async function syncNow(): Promise<{
 }> {
   const flush = await flushQueue()
   const pull = await pullRemoteChanges()
+  notifyDataSynced()
   return { flushed: flush.flushed, pulled: pull.pulled, errors: flush.errors }
+}
+
+/**
+ * Flush + pull when the PWA becomes visible again (sequential multi-device use).
+ * Skipped if last sync was within the resume cooldown (60s).
+ */
+export async function syncOnResume(): Promise<{
+  skipped: boolean
+  flushed: number
+  pulled: number
+  errors: string[]
+}> {
+  if (!navigator.onLine || !shouldSyncOnResume()) {
+    return { skipped: true, flushed: 0, pulled: 0, errors: [] }
+  }
+
+  try {
+    const result = await syncNow()
+    return { skipped: false, ...result }
+  } catch {
+    return { skipped: false, flushed: 0, pulled: 0, errors: ['Resume sync failed'] }
+  }
 }
 
 let listenersStarted = false
@@ -288,14 +313,25 @@ export async function startSyncListeners(): Promise<void> {
   if (listenersStarted) return
   listenersStarted = true
 
-  const run = () => {
+  const runOnline = () => {
     if (!navigator.onLine) return
-    void flushQueue().then(() => pullRemoteChanges()).catch(() => undefined)
+    void syncNow().catch(() => undefined)
   }
 
-  window.addEventListener('online', run)
+  const runVisible = () => {
+    if (document.visibilityState !== 'visible') return
+    void syncOnResume()
+  }
+
+  window.addEventListener('online', runOnline)
+  document.addEventListener('visibilitychange', runVisible)
+  // bfcache / back-forward restore
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) void syncOnResume()
+  })
+
   // Initial attempt if already online
-  run()
+  runOnline()
 }
 
 /** Ensure a remote profiles row exists for the signed-in user. */
