@@ -65,7 +65,9 @@ See earlier phase notes: local CRUD, auth/sync, expenses/receipts, dashboard mat
 1. `npm run build && npm run preview` → offline shell loads after first visit
 2. Queue an expense offline → go online → sync (app `online` and/or SW `replay-sync`)
 3. Android Chrome: install CTA; iOS Safari (not standalone): Share instructions
-4. Enable reminder with Firebase env → `fcm_token` set; send test message
+4. Enable reminder with Firebase env → `fcm_token` set
+5. Firebase Console → **Send test message** (not a campaign) with that token
+6. After a push-related deploy: open the Home Screen app once, toggle reminder **off → on** to refresh the token against the new service worker
 
 ## Scripts
 

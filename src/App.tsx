@@ -8,6 +8,10 @@ import { LocalDataProvider } from './hooks/local-data'
 import LoginPage from './pages/auth/LoginPage'
 import RegisterPage from './pages/auth/RegisterPage'
 import TabsLayout from './pages/tabs/TabsLayout'
+import {
+  getDailyReminderPref,
+  startForegroundMessageListener,
+} from './push/fcm'
 import { startReplaySyncListener } from './services/pwa/replay-sync'
 
 setupIonicReact()
@@ -18,6 +22,11 @@ function AppRoutes() {
   useEffect(() => {
     startReplaySyncListener()
   }, [])
+
+  useEffect(() => {
+    if (!user || !getDailyReminderPref()) return
+    void startForegroundMessageListener()
+  }, [user])
 
   if (loading) {
     return (
