@@ -22,12 +22,10 @@ import {
   signUp,
 } from '../lib/supabase/auth'
 import { isSupabaseConfigured } from '../lib/supabase/client'
-import {
-  hydrateFromRemote,
-  hydrateFromRemoteIfEmpty,
-} from '../services/offline/hydration'
+import { hydrateFromRemote } from '../services/offline/hydration'
 import {
   ensureRemoteProfile,
+  flushQueue,
   pushAllLocalExpenses,
   startSyncListeners,
   syncNow,
@@ -45,17 +43,20 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
+/**
+ * Bring this device in line with the cloud for the signed-in user.
+ * Flush any pending local writes first, then replace local workspace from remote
+ * so iOS / desktop always converge on the same account data.
+ */
 async function bootstrapAuthenticatedUser(user: User): Promise<void> {
   const { profile, migratedGuest, switchedUser } = await bindLocalDataToUser(
     user.id,
   )
 
   if (switchedUser) {
-    // Different account: local was wiped — load this user's cloud data first
     await hydrateFromRemote()
     await ensureRemoteProfile(user.id)
   } else if (migratedGuest) {
-    // First bind: keep guest writes and push them under this account
     await ensureRemoteProfile(user.id)
     await enqueueSyncItem({
       entity: 'profile',
@@ -63,10 +64,14 @@ async function bootstrapAuthenticatedUser(user: User): Promise<void> {
       payload: profile,
     })
     await pushAllLocalExpenses(user.id)
-    await hydrateFromRemoteIfEmpty()
+    await flushQueue()
+    // Pull full cloud workspace (includes this device’s push + other devices)
+    await hydrateFromRemote()
   } else {
+    // Returning same user on this device: push pending, then take cloud snapshot
+    await flushQueue()
+    await hydrateFromRemote()
     await ensureRemoteProfile(user.id)
-    await hydrateFromRemoteIfEmpty()
   }
 
   await syncNow()
@@ -82,6 +87,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const runBootstrap = useCallback(async (nextUser: User) => {
     if (bootstrappedUserId.current === nextUser.id) {
+      await syncNow()
       await startSyncListeners()
       return
     }
@@ -96,10 +102,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const current = await getSession()
         if (cancelled) return
-        setSession(current)
-        setUser(current?.user ?? null)
         if (current?.user) {
           await runBootstrap(current.user)
+          if (cancelled) return
+          setSession(current)
+          setUser(current.user)
+        } else {
+          setSession(null)
+          setUser(null)
         }
       } catch {
         if (!cancelled) {
@@ -114,13 +124,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void init()
 
     const unsubscribe = onAuthStateChange((next) => {
-      setSession(next)
-      setUser(next?.user ?? null)
-      if (next?.user) {
-        void runBootstrap(next.user)
-      } else {
-        bootstrappedUserId.current = null
-      }
+      void (async () => {
+        if (next?.user) {
+          setLoading(true)
+          try {
+            await runBootstrap(next.user)
+            if (cancelled) return
+            setSession(next)
+            setUser(next.user)
+          } finally {
+            if (!cancelled) setLoading(false)
+          }
+        } else {
+          bootstrappedUserId.current = null
+          setSession(null)
+          setUser(null)
+        }
+      })()
     })
 
     return () => {
@@ -131,31 +151,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInWithPassword = useCallback(
     async (email: string, password: string) => {
-      const data = await signIn(email, password)
-      if (data.user) {
-        setSession(data.session)
-        setUser(data.user)
-        await runBootstrap(data.user)
+      setLoading(true)
+      try {
+        const data = await signIn(email, password)
+        if (data.user) {
+          await runBootstrap(data.user)
+          setSession(data.session)
+          setUser(data.user)
+        }
+      } finally {
+        setLoading(false)
       }
     },
     [runBootstrap],
   )
 
   const register = useCallback(async (email: string, password: string) => {
-    const data = await signUp(email, password)
-    if (data.session?.user) {
-      setSession(data.session)
-      setUser(data.session.user)
-      await runBootstrap(data.session.user)
+    setLoading(true)
+    try {
+      const data = await signUp(email, password)
+      if (data.session?.user) {
+        await runBootstrap(data.session.user)
+        setSession(data.session)
+        setUser(data.session.user)
+      }
+    } finally {
+      setLoading(false)
     }
   }, [runBootstrap])
 
   const logOut = useCallback(async () => {
-    await signOut()
-    bootstrappedUserId.current = null
-    await clearLocalWorkspace()
-    setSession(null)
-    setUser(null)
+    setLoading(true)
+    try {
+      await signOut()
+      bootstrappedUserId.current = null
+      await clearLocalWorkspace()
+      setSession(null)
+      setUser(null)
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
   const value = useMemo(
