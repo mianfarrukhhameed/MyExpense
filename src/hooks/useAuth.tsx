@@ -10,9 +10,14 @@ import {
   type ReactNode,
 } from 'react'
 import {
+  DEFAULT_CURRENCY,
+  DEFAULT_MONTHLY_BUDGET,
+} from '../core/config/app.config'
+import {
   bindLocalDataToUser,
   clearLocalWorkspace,
 } from '../db/migration.repo'
+import { listExpenses } from '../db/expenses.repo'
 import { enqueueSyncItem } from '../db/sync-queue.repo'
 import {
   getSession,
@@ -54,18 +59,28 @@ async function bootstrapAuthenticatedUser(user: User): Promise<void> {
   )
 
   if (switchedUser) {
+    // Reinstall / account switch: cloud is source of truth — never push empty defaults
     await hydrateFromRemote()
     await ensureRemoteProfile(user.id)
   } else if (migratedGuest) {
     await ensureRemoteProfile(user.id)
-    await enqueueSyncItem({
-      entity: 'profile',
-      operation: 'update',
-      payload: profile,
-    })
-    await pushAllLocalExpenses(user.id)
+    const expenses = await listExpenses()
+    const hasCustomProfile =
+      Number(profile.monthly_budget) !== DEFAULT_MONTHLY_BUDGET ||
+      profile.currency !== DEFAULT_CURRENCY
+    // Only push profile when guest actually set budget/currency
+    if (hasCustomProfile) {
+      await enqueueSyncItem({
+        entity: 'profile',
+        operation: 'update',
+        payload: profile,
+      })
+    }
+    if (expenses.length > 0) {
+      await pushAllLocalExpenses(user.id)
+    }
     await flushQueue()
-    // Pull full cloud workspace (includes this device’s push + other devices)
+    // Merge with cloud (preserves remote budget if we did not push defaults)
     await hydrateFromRemote()
   } else {
     // Returning same user on this device: push pending, then take cloud snapshot

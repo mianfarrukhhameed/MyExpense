@@ -1,3 +1,7 @@
+import {
+  DEFAULT_CURRENCY,
+  DEFAULT_MONTHLY_BUDGET,
+} from '../../core/config/app.config'
 import type { Expense } from '../../core/types/expense'
 import type { Profile } from '../../core/types/profile'
 import {
@@ -141,6 +145,37 @@ async function flushReceiptUpload(
 }
 
 async function flushProfile(profile: Profile, userId: string): Promise<void> {
+  const { data: remoteRow, error: readError } = await getSupabase()
+    .from('profiles')
+    .select('monthly_budget, currency, fcm_token, updated_at')
+    .eq('id', userId)
+    .maybeSingle()
+  if (readError) throw readError
+
+  if (remoteRow) {
+    const remote = remoteRow as RemoteProfile
+    const localIsDefault =
+      Number(profile.monthly_budget) === DEFAULT_MONTHLY_BUDGET &&
+      profile.currency === DEFAULT_CURRENCY
+    const remoteHasSettings =
+      Number(remote.monthly_budget) !== DEFAULT_MONTHLY_BUDGET ||
+      remote.currency !== DEFAULT_CURRENCY
+    const remoteNewer = remote.updated_at > profile.updated_at
+
+    // Never let empty USD/0 defaults wipe a real cloud budget/currency
+    if (remoteNewer || (localIsDefault && remoteHasSettings)) {
+      await upsertProfile({
+        id: userId,
+        monthly_budget: Number(remote.monthly_budget),
+        currency: remote.currency,
+        fcm_token: remote.fcm_token ?? profile.fcm_token ?? null,
+        updated_at: remote.updated_at,
+        sync_status: 'synced',
+      })
+      return
+    }
+  }
+
   const payload: RemoteProfile = {
     id: userId,
     monthly_budget: profile.monthly_budget,

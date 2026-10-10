@@ -1,3 +1,7 @@
+import {
+  DEFAULT_CURRENCY,
+  DEFAULT_MONTHLY_BUDGET,
+} from '../core/config/app.config'
 import type { Expense } from '../core/types/expense'
 import type { Profile } from '../core/types/profile'
 import { getDb } from './index'
@@ -14,10 +18,25 @@ import {
 
 export type BindLocalDataResult = {
   profile: Profile
-  /** Guest/local rows were re-keyed onto this user (first bind). */
+  /** Guest had real local work that should be pushed, then cloud merged. */
   migratedGuest: boolean
-  /** Previous account's local workspace was cleared. */
+  /** Local workspace was reset; load cloud only (never push defaults). */
   switchedUser: boolean
+}
+
+/** True when local data is more than empty USD / 0 budget defaults. */
+export async function hasMeaningfulLocalGuestData(): Promise<boolean> {
+  const expenses = await listExpenses()
+  if (expenses.length > 0) return true
+
+  try {
+    const profile = await getProfile()
+    if (Number(profile.monthly_budget) !== DEFAULT_MONTHLY_BUDGET) return true
+    if (profile.currency !== DEFAULT_CURRENCY) return true
+  } catch {
+    return false
+  }
+  return false
 }
 
 /**
@@ -59,8 +78,9 @@ export async function migrateGuestDataToUser(userId: string): Promise<Profile> {
 /**
  * Bind IndexedDB to `userId`.
  * - Same user: keep local workspace
- * - First bind (no prior user): migrate guest data onto this account
- * - Different user: clear local workspace (do not re-key previous user's data)
+ * - First bind with real guest work: migrate onto this account
+ * - First bind with empty defaults (reinstall / cleared storage): hydrate-only
+ * - Different user: clear local workspace
  */
 export async function bindLocalDataToUser(
   userId: string,
@@ -72,13 +92,28 @@ export async function bindLocalDataToUser(
     if (profile.id === userId) {
       return { profile, migratedGuest: false, switchedUser: false }
     }
-    const repaired = await migrateGuestDataToUser(userId)
-    return { profile: repaired, migratedGuest: true, switchedUser: false }
+    const meaningful = await hasMeaningfulLocalGuestData()
+    if (meaningful) {
+      const repaired = await migrateGuestDataToUser(userId)
+      return { profile: repaired, migratedGuest: true, switchedUser: false }
+    }
+    await clearLocalWorkspace()
+    setBoundUserId(userId)
+    const profileFresh = await upsertProfile(createEmptyProfileForUser(userId))
+    return { profile: profileFresh, migratedGuest: false, switchedUser: true }
   }
 
   if (!bound) {
-    const migrated = await migrateGuestDataToUser(userId)
-    return { profile: migrated, migratedGuest: true, switchedUser: false }
+    const meaningful = await hasMeaningfulLocalGuestData()
+    if (meaningful) {
+      const migrated = await migrateGuestDataToUser(userId)
+      return { profile: migrated, migratedGuest: true, switchedUser: false }
+    }
+    // Reinstall / new browser: empty defaults must NOT overwrite cloud profile
+    await clearLocalWorkspace()
+    setBoundUserId(userId)
+    const profile = await upsertProfile(createEmptyProfileForUser(userId))
+    return { profile, migratedGuest: false, switchedUser: true }
   }
 
   // Account switch: never attach previous user's expenses/budget to the new login
