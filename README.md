@@ -48,6 +48,14 @@ Offline-first personal expense tracker PWA (Ionic React + IndexedDB + Supabase).
 - Extra categories: Grocery, Kids, Kids School, Clothing, Medical, Services, Pocket Money, Loan Return
 - Migration [`003_plans_loans_month_budgets.sql`](supabase/migrations/003_plans_loans_month_budgets.sql)
 
+### Voice & receipt expense capture (on-device)
+
+- Expenses FAB expands to **Add**, **Voice** (mic), **Scan** (camera)
+- Prefers Chrome **Prompt API** (text/image/audio) when available; otherwise **Web Speech** + rules / **Tesseract.js** OCR + rules
+- Optional Language Detector + Translator when present (desktop Chrome)
+- Always opens **Confirm expense** form before save — never auto-saves
+- Best on desktop Chrome; iOS PWA: Scan/OCR works; Voice may be limited/unavailable
+
 ## Supabase setup
 
 1. Create a project at [supabase.com](https://supabase.com)

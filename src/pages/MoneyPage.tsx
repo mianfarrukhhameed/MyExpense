@@ -1,14 +1,19 @@
 import {
   IonFab,
   IonFabButton,
+  IonFabList,
   IonIcon,
   IonLabel,
   IonSegment,
   IonSegmentButton,
   useIonToast,
 } from '@ionic/react'
-import { addOutline } from 'ionicons/icons'
-import { useMemo, useState } from 'react'
+import {
+  addOutline,
+  cameraOutline,
+  micOutline,
+} from 'ionicons/icons'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ListTotalBar } from '../components/common/ListTotalBar'
 import { MonthFilterBar } from '../components/common/MonthFilterBar'
 import { PageScaffold } from '../components/common/PageScaffold'
@@ -29,6 +34,7 @@ import {
   type PlanFormValues,
 } from '../components/plans/PlanFormModal'
 import { PlanList } from '../components/plans/PlanList'
+import type { ExpenseDraft } from '../core/types/expense-draft'
 import type { Expense } from '../core/types/expense'
 import type { Loan } from '../core/types/loan'
 import type { PlanExpense } from '../core/types/plan'
@@ -39,6 +45,15 @@ import { useExpenses } from '../hooks/useExpenses'
 import { useLoans } from '../hooks/useLoans'
 import { usePlans } from '../hooks/usePlans'
 import { useProfile } from '../hooks/useProfile'
+import {
+  canCaptureVoice,
+  type CaptureCapabilities,
+} from '../services/ai/capability'
+import {
+  captureExpenseFromReceipt,
+  captureExpenseFromVoice,
+  loadCaptureCapabilities,
+} from '../services/ai/expense-capture'
 
 type MoneySegment = 'expenses' | 'plans' | 'loans'
 
@@ -77,14 +92,22 @@ export default function MoneyPage() {
   const [monthKey, setMonthKey] = useState<string | null>(() => toMonthKey())
   const [search, setSearch] = useState('')
   const [present] = useIonToast()
+  const scanInputRef = useRef<HTMLInputElement>(null)
 
   const [expenseFormOpen, setExpenseFormOpen] = useState(false)
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
+  const [expenseDraft, setExpenseDraft] = useState<ExpenseDraft | null>(null)
+  const [capturing, setCapturing] = useState(false)
+  const [caps, setCaps] = useState<CaptureCapabilities | null>(null)
   const [planFormOpen, setPlanFormOpen] = useState(false)
   const [editingPlan, setEditingPlan] = useState<PlanExpense | null>(null)
   const [loanFormOpen, setLoanFormOpen] = useState(false)
   const [editingLoan, setEditingLoan] = useState<Loan | null>(null)
   const [payingLoan, setPayingLoan] = useState<Loan | null>(null)
+
+  useEffect(() => {
+    void loadCaptureCapabilities().then(setCaps)
+  }, [])
 
   const filteredExpenses = useMemo(() => {
     let list = expenses
@@ -145,9 +168,12 @@ export default function MoneyPage() {
     [filteredLoans],
   )
 
+  const voiceEnabled = caps ? canCaptureVoice(caps) : true
+
   const openCreate = () => {
     if (segment === 'expenses') {
       setEditingExpense(null)
+      setExpenseDraft(null)
       setExpenseFormOpen(true)
     } else if (segment === 'plans') {
       setEditingPlan(null)
@@ -155,6 +181,58 @@ export default function MoneyPage() {
     } else {
       setEditingLoan(null)
       setLoanFormOpen(true)
+    }
+  }
+
+  const handleVoiceCapture = async () => {
+    if (capturing) return
+    if (caps && !canCaptureVoice(caps)) {
+      await present({
+        message: 'Voice entry is not supported on this device',
+        duration: 2500,
+        color: 'warning',
+      })
+      return
+    }
+
+    setCapturing(true)
+    try {
+      const draft = await captureExpenseFromVoice((message) => {
+        void present({ message, duration: 1200, color: 'medium' })
+      })
+      setEditingExpense(null)
+      setExpenseDraft(draft)
+      setExpenseFormOpen(true)
+    } catch (err) {
+      await present({
+        message: err instanceof Error ? err.message : 'Voice capture failed',
+        duration: 3000,
+        color: 'danger',
+      })
+    } finally {
+      setCapturing(false)
+    }
+  }
+
+  const handleReceiptFile = async (file: File | null) => {
+    if (!file || capturing) return
+    setCapturing(true)
+    try {
+      const draft = await captureExpenseFromReceipt(file, (message) => {
+        void present({ message, duration: 1500, color: 'medium' })
+      })
+      setEditingExpense(null)
+      setExpenseDraft(draft)
+      setExpenseFormOpen(true)
+    } catch (err) {
+      await present({
+        message: err instanceof Error ? err.message : 'Receipt scan failed',
+        duration: 3000,
+        color: 'danger',
+      })
+    } finally {
+      setCapturing(false)
+      if (scanInputRef.current) scanInputRef.current.value = ''
     }
   }
 
@@ -238,12 +316,57 @@ export default function MoneyPage() {
       title="Money"
       fab={
         <IonFab slot="fixed" vertical="bottom" horizontal="end">
-          <IonFabButton onClick={openCreate}>
-            <IonIcon icon={addOutline} />
-          </IonFabButton>
+          {segment === 'expenses' ? (
+            <>
+              <IonFabButton disabled={capturing}>
+                <IonIcon icon={addOutline} />
+              </IonFabButton>
+              <IonFabList side="top">
+                <IonFabButton
+                  data-testid="fab-manual-expense"
+                  onClick={openCreate}
+                  disabled={capturing}
+                >
+                  <IonIcon icon={addOutline} />
+                </IonFabButton>
+                <IonFabButton
+                  data-testid="fab-voice-expense"
+                  color={voiceEnabled ? 'primary' : 'medium'}
+                  onClick={() => void handleVoiceCapture()}
+                  disabled={capturing}
+                >
+                  <IonIcon icon={micOutline} />
+                </IonFabButton>
+                <IonFabButton
+                  data-testid="fab-scan-expense"
+                  onClick={() => scanInputRef.current?.click()}
+                  disabled={capturing}
+                >
+                  <IonIcon icon={cameraOutline} />
+                </IonFabButton>
+              </IonFabList>
+            </>
+          ) : (
+            <IonFabButton onClick={openCreate} disabled={capturing}>
+              <IonIcon icon={addOutline} />
+            </IonFabButton>
+          )}
         </IonFab>
       }
     >
+      <input
+        ref={scanInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="receipt-file-input"
+        data-testid="receipt-scan-input"
+        onChange={(event) => {
+          const file = event.target.files?.[0] ?? null
+          void handleReceiptFile(file)
+        }}
+      />
+
       <div className="page-section">
         <IonSegment
           value={segment}
@@ -286,6 +409,7 @@ export default function MoneyPage() {
               currency={currency}
               loading={expensesLoading}
               onEdit={(expense) => {
+                setExpenseDraft(null)
                 setEditingExpense(expense)
                 setExpenseFormOpen(true)
               }}
@@ -373,9 +497,11 @@ export default function MoneyPage() {
       <ExpenseFormModal
         isOpen={expenseFormOpen}
         expense={editingExpense}
+        draft={expenseDraft}
         onDismiss={() => {
           setExpenseFormOpen(false)
           setEditingExpense(null)
+          setExpenseDraft(null)
         }}
         onSubmit={handleExpenseSubmit}
       />

@@ -190,3 +190,9 @@ body {
   font-weight: 400;
   font-size: 0.85rem;
 }
+
+.draft-note {
+  display: block;
+  margin: 0 4px 12px;
+  line-height: 1.35;
+}

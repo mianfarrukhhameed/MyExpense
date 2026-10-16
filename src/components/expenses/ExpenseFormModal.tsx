@@ -9,6 +9,7 @@ import {
   IonLabel,
   IonList,
   IonModal,
+  IonNote,
   IonSelect,
   IonSelectOption,
   IonTitle,
@@ -17,6 +18,7 @@ import {
 } from '@ionic/react'
 import { useEffect, useRef, useState } from 'react'
 import { EXPENSE_CATEGORIES } from '../../core/config/app.config'
+import type { ExpenseDraft } from '../../core/types/expense-draft'
 import type { Expense } from '../../core/types/expense'
 import { toDateKey } from '../../core/utils/date'
 import { getReceiptDisplayUrl } from '../../services/storage/receipts'
@@ -33,6 +35,7 @@ export interface ExpenseFormValues {
 interface ExpenseFormModalProps {
   isOpen: boolean
   expense?: Expense | null
+  draft?: ExpenseDraft | null
   onDismiss: () => void
   onSubmit: (values: ExpenseFormValues) => Promise<void>
 }
@@ -40,6 +43,7 @@ interface ExpenseFormModalProps {
 export function ExpenseFormModal({
   isOpen,
   expense,
+  draft,
   onDismiss,
   onSubmit,
 }: ExpenseFormModalProps) {
@@ -51,12 +55,39 @@ export function ExpenseFormModal({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [clearReceipt, setClearReceipt] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [draftNote, setDraftNote] = useState<string | null>(null)
   const [present] = useIonToast()
   const fileRef = useRef<HTMLInputElement>(null)
   const objectUrlRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!isOpen) return
+
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current)
+      objectUrlRef.current = null
+    }
+
+    if (draft && !expense) {
+      setAmount(draft.amount != null ? String(draft.amount) : '')
+      setCategory(draft.category || EXPENSE_CATEGORIES[0])
+      setDescription(draft.description ?? '')
+      setDate(draft.date || toDateKey())
+      setReceiptFile(draft.receiptFile ?? null)
+      setClearReceipt(false)
+      setSaving(false)
+      setDraftNote(
+        `Draft from ${draft.source}${draft.confidence !== 'high' ? ' — please verify' : ''}`,
+      )
+      if (draft.receiptFile) {
+        const url = URL.createObjectURL(draft.receiptFile)
+        objectUrlRef.current = url
+        setPreviewUrl(url)
+      } else {
+        setPreviewUrl(null)
+      }
+      return
+    }
 
     setAmount(expense ? String(expense.amount) : '')
     setCategory(expense?.category ?? EXPENSE_CATEGORIES[0])
@@ -65,13 +96,10 @@ export function ExpenseFormModal({
     setReceiptFile(null)
     setClearReceipt(false)
     setSaving(false)
+    setDraftNote(null)
 
     let cancelled = false
     void (async () => {
-      if (objectUrlRef.current) {
-        URL.revokeObjectURL(objectUrlRef.current)
-        objectUrlRef.current = null
-      }
       if (!expense) {
         setPreviewUrl(null)
         return
@@ -91,7 +119,7 @@ export function ExpenseFormModal({
     return () => {
       cancelled = true
     }
-  }, [isOpen, expense])
+  }, [isOpen, expense, draft])
 
   useEffect(() => {
     return () => {
@@ -174,7 +202,9 @@ export function ExpenseFormModal({
           <IonButtons slot="start">
             <IonButton onClick={onDismiss}>Cancel</IonButton>
           </IonButtons>
-          <IonTitle>{expense ? 'Edit expense' : 'New expense'}</IonTitle>
+          <IonTitle>
+            {expense ? 'Edit expense' : draft ? 'Confirm expense' : 'New expense'}
+          </IonTitle>
           <IonButtons slot="end">
             <IonButton strong disabled={saving} onClick={() => void handleSave()}>
               Save
@@ -183,6 +213,12 @@ export function ExpenseFormModal({
         </IonToolbar>
       </IonHeader>
       <IonContent className="ion-padding">
+        {draftNote && (
+          <IonNote color="medium" className="draft-note">
+            {draftNote}
+            {draft?.rawText ? ` · “${draft.rawText.slice(0, 80)}${draft.rawText.length > 80 ? '…' : ''}”` : ''}
+          </IonNote>
+        )}
         <IonList inset>
           <IonItem>
             <IonInput
