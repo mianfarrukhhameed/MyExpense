@@ -3,6 +3,9 @@ import {
   DEFAULT_MONTHLY_BUDGET,
 } from '../../core/config/app.config'
 import type { Expense } from '../../core/types/expense'
+import type { Loan } from '../../core/types/loan'
+import type { MonthBudget } from '../../core/types/month-budget'
+import type { PlanExpense } from '../../core/types/plan'
 import type { Profile } from '../../core/types/profile'
 import {
   getExpenseById,
@@ -10,6 +13,24 @@ import {
   removeExpense,
   upsertExpense,
 } from '../../db/expenses.repo'
+import {
+  getLoanById,
+  listLoans,
+  removeLoan,
+  upsertLoan,
+} from '../../db/loans.repo'
+import {
+  getMonthBudgetById,
+  listMonthBudgets,
+  removeMonthBudget,
+  upsertMonthBudget,
+} from '../../db/month-budgets.repo'
+import {
+  getPlanById,
+  listPlans,
+  removePlan,
+  upsertPlan,
+} from '../../db/plans.repo'
 import {
   deleteReceiptBlob,
   getReceiptBlob,
@@ -51,6 +72,42 @@ type RemoteProfile = {
   updated_at: string
 }
 
+type RemotePlan = {
+  id: string
+  user_id: string
+  amount: number
+  category: string
+  description: string | null
+  due_date: string
+  recurrence: 'none' | 'monthly'
+  day_of_month: number | null
+  status: 'upcoming' | 'paid'
+  created_at: string
+  updated_at: string
+}
+
+type RemoteLoan = {
+  id: string
+  user_id: string
+  person: string
+  amount: number
+  remaining: number
+  direction: 'borrowed' | 'lent'
+  loan_date: string
+  due_date: string
+  description: string | null
+  created_at: string
+  updated_at: string
+}
+
+type RemoteMonthBudget = {
+  id: string
+  user_id: string
+  month_key: string
+  amount: number
+  updated_at: string
+}
+
 function toRemoteExpense(expense: Expense, userId: string) {
   return {
     id: expense.id,
@@ -76,6 +133,96 @@ function fromRemoteExpense(row: RemoteExpense): Expense {
     receipt_url: row.receipt_url,
     local_receipt_blob_key: null,
     created_at: row.created_at,
+    updated_at: row.updated_at,
+    sync_status: 'synced',
+  }
+}
+
+function toRemotePlan(plan: PlanExpense, userId: string): RemotePlan {
+  return {
+    id: plan.id,
+    user_id: userId,
+    amount: plan.amount,
+    category: plan.category,
+    description: plan.description,
+    due_date: plan.due_date,
+    recurrence: plan.recurrence,
+    day_of_month: plan.day_of_month,
+    status: plan.status,
+    created_at: plan.created_at,
+    updated_at: plan.updated_at,
+  }
+}
+
+function fromRemotePlan(row: RemotePlan): PlanExpense {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    amount: Number(row.amount),
+    category: row.category,
+    description: row.description,
+    due_date: row.due_date,
+    recurrence: row.recurrence,
+    day_of_month: row.day_of_month,
+    status: row.status,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    sync_status: 'synced',
+  }
+}
+
+function toRemoteLoan(loan: Loan, userId: string): RemoteLoan {
+  return {
+    id: loan.id,
+    user_id: userId,
+    person: loan.person,
+    amount: loan.amount,
+    remaining: loan.remaining,
+    direction: loan.direction,
+    loan_date: loan.loan_date,
+    due_date: loan.due_date,
+    description: loan.description,
+    created_at: loan.created_at,
+    updated_at: loan.updated_at,
+  }
+}
+
+function fromRemoteLoan(row: RemoteLoan): Loan {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    person: row.person,
+    amount: Number(row.amount),
+    remaining: Number(row.remaining),
+    direction: row.direction,
+    loan_date: row.loan_date,
+    due_date: row.due_date,
+    description: row.description,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    sync_status: 'synced',
+  }
+}
+
+function toRemoteMonthBudget(
+  budget: MonthBudget,
+  userId: string,
+): RemoteMonthBudget {
+  return {
+    id: budget.id,
+    user_id: userId,
+    month_key: budget.month_key,
+    amount: budget.amount,
+    updated_at: budget.updated_at,
+  }
+}
+
+function fromRemoteMonthBudget(row: RemoteMonthBudget): MonthBudget {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    month_key: row.month_key,
+    amount: Number(row.amount),
     updated_at: row.updated_at,
     sync_status: 'synced',
   }
@@ -107,7 +254,6 @@ async function flushExpenseDelete(
     await getSupabase().storage.from('receipts').remove([receiptUrl])
   }
 
-  // Local row may already be gone
   const local = await getExpenseById(id)
   if (local) await removeExpense(id)
 }
@@ -118,10 +264,7 @@ async function flushReceiptUpload(
   userId: string,
 ): Promise<void> {
   const blob = await getReceiptBlob(blobKey)
-  if (!blob) {
-    // Blob already cleared — treat as success
-    return
-  }
+  if (!blob) return
 
   const path = await uploadReceipt(userId, expenseId, blob)
   const expense = await getExpenseById(expenseId)
@@ -144,6 +287,64 @@ async function flushReceiptUpload(
   await deleteReceiptBlob(blobKey)
 }
 
+async function flushPlanCreateOrUpdate(
+  plan: PlanExpense,
+  userId: string,
+): Promise<void> {
+  const payload = toRemotePlan({ ...plan, user_id: userId }, userId)
+  const { error } = await getSupabase().from('plans').upsert(payload)
+  if (error) throw error
+  await upsertPlan({ ...plan, user_id: userId, sync_status: 'synced' })
+}
+
+async function flushPlanDelete(id: string): Promise<void> {
+  const { error } = await getSupabase().from('plans').delete().eq('id', id)
+  if (error) throw error
+  const local = await getPlanById(id)
+  if (local) await removePlan(id)
+}
+
+async function flushLoanCreateOrUpdate(
+  loan: Loan,
+  userId: string,
+): Promise<void> {
+  const payload = toRemoteLoan({ ...loan, user_id: userId }, userId)
+  const { error } = await getSupabase().from('loans').upsert(payload)
+  if (error) throw error
+  await upsertLoan({ ...loan, user_id: userId, sync_status: 'synced' })
+}
+
+async function flushLoanDelete(id: string): Promise<void> {
+  const { error } = await getSupabase().from('loans').delete().eq('id', id)
+  if (error) throw error
+  const local = await getLoanById(id)
+  if (local) await removeLoan(id)
+}
+
+async function flushMonthBudgetCreateOrUpdate(
+  budget: MonthBudget,
+  userId: string,
+): Promise<void> {
+  const payload = toRemoteMonthBudget({ ...budget, user_id: userId }, userId)
+  const { error } = await getSupabase().from('month_budgets').upsert(payload)
+  if (error) throw error
+  await upsertMonthBudget({
+    ...budget,
+    user_id: userId,
+    sync_status: 'synced',
+  })
+}
+
+async function flushMonthBudgetDelete(id: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('month_budgets')
+    .delete()
+    .eq('id', id)
+  if (error) throw error
+  const local = await getMonthBudgetById(id)
+  if (local) await removeMonthBudget(id)
+}
+
 async function flushProfile(profile: Profile, userId: string): Promise<void> {
   const { data: remoteRow, error: readError } = await getSupabase()
     .from('profiles')
@@ -162,7 +363,6 @@ async function flushProfile(profile: Profile, userId: string): Promise<void> {
       remote.currency !== DEFAULT_CURRENCY
     const remoteNewer = remote.updated_at > profile.updated_at
 
-    // Never let empty USD/0 defaults wipe a real cloud budget/currency
     if (remoteNewer || (localIsDefault && remoteHasSettings)) {
       await upsertProfile({
         id: userId,
@@ -223,6 +423,30 @@ export async function flushQueue(): Promise<{ flushed: number; errors: string[] 
       } else if (item.entity === 'receipt') {
         const payload = item.payload as { expenseId: string; blobKey: string }
         await flushReceiptUpload(payload.expenseId, payload.blobKey, user.id)
+      } else if (item.entity === 'plan') {
+        if (item.operation === 'delete') {
+          const payload = item.payload as { id: string }
+          await flushPlanDelete(payload.id)
+        } else {
+          await flushPlanCreateOrUpdate(item.payload as PlanExpense, user.id)
+        }
+      } else if (item.entity === 'loan') {
+        if (item.operation === 'delete') {
+          const payload = item.payload as { id: string }
+          await flushLoanDelete(payload.id)
+        } else {
+          await flushLoanCreateOrUpdate(item.payload as Loan, user.id)
+        }
+      } else if (item.entity === 'month_budget') {
+        if (item.operation === 'delete') {
+          const payload = item.payload as { id: string }
+          await flushMonthBudgetDelete(payload.id)
+        } else {
+          await flushMonthBudgetCreateOrUpdate(
+            item.payload as MonthBudget,
+            user.id,
+          )
+        }
       }
       await removeSyncItem(item.id)
       flushed += 1
@@ -244,6 +468,33 @@ export async function flushQueue(): Promise<{ flushed: number; errors: string[] 
   return { flushed, errors }
 }
 
+async function pullEntityTable<T extends { id: string; updated_at: string }>(
+  table: string,
+  userId: string,
+  watermark: string | null,
+  apply: (row: T) => Promise<boolean>,
+): Promise<number> {
+  const supabase = getSupabase()
+  let query = supabase
+    .from(table)
+    .select('*')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: true })
+
+  if (watermark) {
+    query = query.gt('updated_at', watermark)
+  }
+
+  const { data, error } = await query
+  if (error) throw error
+
+  let pulled = 0
+  for (const row of (data ?? []) as T[]) {
+    if (await apply(row)) pulled += 1
+  }
+  return pulled
+}
+
 /**
  * Pull remote rows newer than the local watermark (last-write-wins via updated_at).
  */
@@ -259,26 +510,61 @@ export async function pullRemoteChanges(): Promise<{ pulled: number }> {
   const watermark = getLastPullAt()
   let pulled = 0
 
-  let expenseQuery = supabase
-    .from('expenses')
-    .select('*')
-    .eq('user_id', user.id)
-    .order('updated_at', { ascending: true })
+  pulled += await pullEntityTable<RemoteExpense>(
+    'expenses',
+    user.id,
+    watermark,
+    async (row) => {
+      const local = await getExpenseById(row.id)
+      if (!local || local.updated_at < row.updated_at) {
+        await upsertExpense(fromRemoteExpense(row))
+        return true
+      }
+      return false
+    },
+  )
 
-  if (watermark) {
-    expenseQuery = expenseQuery.gt('updated_at', watermark)
-  }
+  pulled += await pullEntityTable<RemotePlan>(
+    'plans',
+    user.id,
+    watermark,
+    async (row) => {
+      const local = await getPlanById(row.id)
+      if (!local || local.updated_at < row.updated_at) {
+        await upsertPlan(fromRemotePlan(row))
+        return true
+      }
+      return false
+    },
+  )
 
-  const { data: remoteExpenses, error: expenseError } = await expenseQuery
-  if (expenseError) throw expenseError
+  pulled += await pullEntityTable<RemoteLoan>(
+    'loans',
+    user.id,
+    watermark,
+    async (row) => {
+      const local = await getLoanById(row.id)
+      if (!local || local.updated_at < row.updated_at) {
+        await upsertLoan(fromRemoteLoan(row))
+        return true
+      }
+      return false
+    },
+  )
 
-  for (const row of (remoteExpenses ?? []) as RemoteExpense[]) {
-    const local = await getExpenseById(row.id)
-    if (!local || local.updated_at < row.updated_at) {
-      await upsertExpense(fromRemoteExpense(row))
-      pulled += 1
-    }
-  }
+  pulled += await pullEntityTable<RemoteMonthBudget>(
+    'month_budgets',
+    user.id,
+    watermark,
+    async (row) => {
+      const local = await getMonthBudgetById(row.id)
+      if (!local || local.updated_at < row.updated_at) {
+        await upsertMonthBudget(fromRemoteMonthBudget(row))
+        return true
+      }
+      return false
+    },
+  )
 
   const { data: remoteProfile, error: profileError } = await supabase
     .from('profiles')
@@ -360,12 +646,10 @@ export async function startSyncListeners(): Promise<void> {
 
   window.addEventListener('online', runOnline)
   document.addEventListener('visibilitychange', runVisible)
-  // bfcache / back-forward restore
   window.addEventListener('pageshow', (event) => {
     if (event.persisted) void syncOnResume()
   })
 
-  // Initial attempt if already online
   runOnline()
 }
 
@@ -373,7 +657,6 @@ export async function startSyncListeners(): Promise<void> {
 export async function ensureRemoteProfile(userId: string): Promise<void> {
   if (!isSupabaseConfigured()) return
 
-  // Never overwrite an existing cloud profile with empty local defaults (e.g. after account switch)
   const { data: existing, error: readError } = await getSupabase()
     .from('profiles')
     .select('id')
@@ -402,5 +685,45 @@ export async function pushAllLocalExpenses(userId: string): Promise<void> {
   if (error) throw error
   for (const expense of expenses) {
     await upsertExpense({ ...expense, user_id: userId, sync_status: 'synced' })
+  }
+}
+
+export async function pushAllLocalPlans(userId: string): Promise<void> {
+  if (!isSupabaseConfigured()) return
+  const plans = await listPlans()
+  if (plans.length === 0) return
+  const rows = plans.map((plan) => toRemotePlan(plan, userId))
+  const { error } = await getSupabase().from('plans').upsert(rows)
+  if (error) throw error
+  for (const plan of plans) {
+    await upsertPlan({ ...plan, user_id: userId, sync_status: 'synced' })
+  }
+}
+
+export async function pushAllLocalLoans(userId: string): Promise<void> {
+  if (!isSupabaseConfigured()) return
+  const loans = await listLoans()
+  if (loans.length === 0) return
+  const rows = loans.map((loan) => toRemoteLoan(loan, userId))
+  const { error } = await getSupabase().from('loans').upsert(rows)
+  if (error) throw error
+  for (const loan of loans) {
+    await upsertLoan({ ...loan, user_id: userId, sync_status: 'synced' })
+  }
+}
+
+export async function pushAllLocalMonthBudgets(userId: string): Promise<void> {
+  if (!isSupabaseConfigured()) return
+  const budgets = await listMonthBudgets()
+  if (budgets.length === 0) return
+  const rows = budgets.map((budget) => toRemoteMonthBudget(budget, userId))
+  const { error } = await getSupabase().from('month_budgets').upsert(rows)
+  if (error) throw error
+  for (const budget of budgets) {
+    await upsertMonthBudget({
+      ...budget,
+      user_id: userId,
+      sync_status: 'synced',
+    })
   }
 }

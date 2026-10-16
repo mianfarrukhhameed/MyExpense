@@ -7,8 +7,8 @@ Offline-first personal expense tracker PWA (Ionic React + IndexedDB + Supabase).
 ### Phase 1 — Scaffold and offline database
 
 - Vite + React + TypeScript + Ionic React (adaptive iOS / Material)
-- Bottom tabs: Dashboard, Expenses, Settings (`/tabs/...`)
-- IndexedDB (`myexpense` v1): `expenses`, `profile`, `sync_queue`, `receipt_blobs`
+- Bottom tabs: Dashboard, Money, Settings (`/tabs/...`)
+- IndexedDB (`myexpense` v2): `expenses`, `profile`, `sync_queue`, `receipt_blobs`, `plans`, `loans`, `month_budgets`
 - Local CRUD via repos + shared local-data context (tabs stay in sync)
 - PWA shell via `vite-plugin-pwa` / Workbox
 
@@ -26,21 +26,32 @@ Offline-first personal expense tracker PWA (Ionic React + IndexedDB + Supabase).
 ### Phase 4 — Dashboard and charts
 
 - Budget meter, burn-rate pacing, Recharts 12-month comparison
-- Settings: budget + currency
+- Settings: month budget + default budget + currency
 
-### Phase 5 — PWA hardening and FCM (current)
+### Phase 5 — PWA hardening and FCM
 
 - Workbox: app shell + NetworkFirst for Supabase REST GETs
-- Background Sync tag `replay-sync` → client flushes IndexedDB `sync_queue` (single source of truth)
+- Background Sync tag `replay-sync` → client flushes IndexedDB `sync_queue`
 - `InstallPrompt`: Android `beforeinstallprompt` sheet; iOS Share → Add to Home Screen tip
 - FCM: Settings **Daily expense reminder** stores `profiles.fcm_token`
 - Migration [`002_fcm_token.sql`](supabase/migrations/002_fcm_token.sql)
 - Cloudflare Worker cron stub: [`workers/daily-reminder/`](workers/daily-reminder/)
 
+### Money hub (Plans, Loans, month filters)
+
+- Tab **Money** with segments: Expenses | Plans | Loans
+- Search + month filter (default = current month; “All months” for full totals)
+- List totals: expenses/plans sum; loans show **Borrowed** (by due date) and **Lent** (by loan date)
+- Plans: one-off or monthly recurring; **Paid** copies to Expenses and advances next due
+- Loans: borrowed or lent; **Pay** records payment → Expense (`Loan Return`) and reduces remaining
+- Per-month budgets (`month_budgets`) with profile default fallback
+- Extra categories: Grocery, Kids, Kids School, Clothing, Medical, Services, Pocket Money, Loan Return
+- Migration [`003_plans_loans_month_budgets.sql`](supabase/migrations/003_plans_loans_month_budgets.sql)
+
 ## Supabase setup
 
 1. Create a project at [supabase.com](https://supabase.com)
-2. Run [`001_init.sql`](supabase/migrations/001_init.sql) then [`002_fcm_token.sql`](supabase/migrations/002_fcm_token.sql)
+2. Run migrations in order: [`001_init.sql`](supabase/migrations/001_init.sql), [`002_fcm_token.sql`](supabase/migrations/002_fcm_token.sql), [`003_plans_loans_month_budgets.sql`](supabase/migrations/003_plans_loans_month_budgets.sql)
 3. Copy `.env.example` → `.env` and set Supabase (+ optional Firebase) keys
 4. Auth → URL configuration: local origin and Cloudflare Pages HTTPS origin
 5. Restart `npm run dev` after changing env
@@ -56,18 +67,20 @@ Offline-first personal expense tracker PWA (Ionic React + IndexedDB + Supabase).
 
 ## Smoke tests
 
-### Phases 1–4
+### Money hub
 
-See earlier phase notes: local CRUD, auth/sync, expenses/receipts, dashboard math.
+1. Money → Expenses: add expense, search, change month, confirm total updates
+2. Plans: add monthly rent (day 15) → **Paid** → appears under Expenses; plan due advances
+3. Loans: add borrowed + lent → **Pay** → expense created; borrowed/lent totals update
+4. Settings: set month budget for current month; Dashboard meter uses it
+5. After deploying SQL `003_*`, Sync now pushes/pulls plans, loans, month budgets
 
 ### Phase 5
 
 1. `npm run build && npm run preview` → offline shell loads after first visit
-2. Queue an expense offline → go online → sync (app `online` and/or SW `replay-sync`)
+2. Queue an expense offline → go online → sync
 3. Android Chrome: install CTA; iOS Safari (not standalone): Share instructions
 4. Enable reminder with Firebase env → `fcm_token` set
-5. Firebase Console → **Send test message** (not a campaign) with that token
-6. After a push-related deploy: open the Home Screen app once, toggle reminder **off → on** to refresh the token against the new service worker
 
 ## Scripts
 
@@ -80,7 +93,7 @@ npm run preview
 
 ## Deploy
 
-Cloudflare Pages after Phase 5 (or earlier for sync-only). Allowlist the Pages origin in Supabase Auth.
+Cloudflare Pages. Allowlist the Pages origin in Supabase Auth. Run SQL migration `003` before relying on Plans/Loans cloud sync.
 
 ## Environment
 

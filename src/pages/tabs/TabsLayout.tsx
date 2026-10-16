@@ -8,12 +8,12 @@ import {
 } from '@ionic/react'
 import {
   homeOutline,
-  listOutline,
   settingsOutline,
+  walletOutline,
 } from 'ionicons/icons'
 import { Navigate, Route } from 'react-router-dom'
 import DashboardPage from '../DashboardPage'
-import ExpensesPage from '../ExpensesPage'
+import MoneyPage from '../MoneyPage'
 import SettingsPage from '../SettingsPage'
 
 export default function TabsLayout() {
@@ -21,7 +21,8 @@ export default function TabsLayout() {
     <IonTabs>
       <IonRouterOutlet>
         <Route path="/tabs/dashboard" element={<DashboardPage />} />
-        <Route path="/tabs/expenses" element={<ExpensesPage />} />
+        <Route path="/tabs/money" element={<MoneyPage />} />
+        <Route path="/tabs/expenses" element={<Navigate to="/tabs/money" replace />} />
         <Route path="/tabs/settings" element={<SettingsPage />} />
         <Route path="/tabs" element={<Navigate to="/tabs/dashboard" replace />} />
         <Route path="/" element={<Navigate to="/tabs/dashboard" replace />} />
@@ -32,9 +33,9 @@ export default function TabsLayout() {
           <IonIcon icon={homeOutline} />
           <IonLabel>Dashboard</IonLabel>
         </IonTabButton>
-        <IonTabButton tab="expenses" href="/tabs/expenses">
-          <IonIcon icon={listOutline} />
-          <IonLabel>Expenses</IonLabel>
+        <IonTabButton tab="money" href="/tabs/money">
+          <IonIcon icon={walletOutline} />
+          <IonLabel>Money</IonLabel>
         </IonTabButton>
         <IonTabButton tab="settings" href="/tabs/settings">
           <IonIcon icon={settingsOutline} />

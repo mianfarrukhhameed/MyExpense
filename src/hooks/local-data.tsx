@@ -8,8 +8,11 @@ import {
   type ReactNode,
 } from 'react'
 import type { Expense, ExpenseCategory } from '../core/types/expense'
+import type { Loan, LoanDirection } from '../core/types/loan'
+import type { MonthBudget } from '../core/types/month-budget'
+import type { PlanExpense, PlanRecurrence } from '../core/types/plan'
 import type { Profile } from '../core/types/profile'
-import { toDateKey } from '../core/utils/date'
+import { nextMonthlyDueDate, toDateKey } from '../core/utils/date'
 import {
   countExpenses,
   getExpenseById,
@@ -17,6 +20,24 @@ import {
   removeExpense,
   upsertExpense,
 } from '../db/expenses.repo'
+import {
+  getLoanById,
+  listLoans,
+  removeLoan,
+  upsertLoan,
+} from '../db/loans.repo'
+import {
+  getMonthBudget,
+  listMonthBudgets,
+  monthBudgetId,
+  upsertMonthBudget,
+} from '../db/month-budgets.repo'
+import {
+  getPlanById,
+  listPlans,
+  removePlan,
+  upsertPlan,
+} from '../db/plans.repo'
 import {
   deleteReceiptBlob,
   putReceiptBlob,
@@ -51,8 +72,48 @@ export interface UpdateExpenseInput {
   clearReceipt?: boolean
 }
 
+export interface AddPlanInput {
+  amount: number
+  category: string
+  description?: string | null
+  due_date: string
+  recurrence: PlanRecurrence
+  day_of_month?: number | null
+}
+
+export interface UpdatePlanInput {
+  amount: number
+  category: string
+  description?: string | null
+  due_date: string
+  recurrence: PlanRecurrence
+  day_of_month?: number | null
+}
+
+export interface AddLoanInput {
+  person: string
+  amount: number
+  direction: LoanDirection
+  loan_date: string
+  due_date: string
+  description?: string | null
+}
+
+export interface UpdateLoanInput {
+  person: string
+  amount: number
+  remaining: number
+  direction: LoanDirection
+  loan_date: string
+  due_date: string
+  description?: string | null
+}
+
 interface LocalDataContextValue {
   expenses: Expense[]
+  plans: PlanExpense[]
+  loans: Loan[]
+  monthBudgets: MonthBudget[]
   count: number
   profile: Profile | null
   pendingSyncCount: number
@@ -62,7 +123,20 @@ interface LocalDataContextValue {
   addExpense: (input: AddExpenseInput) => Promise<Expense>
   updateExpense: (id: string, input: UpdateExpenseInput) => Promise<Expense>
   deleteExpense: (id: string) => Promise<void>
+  addPlan: (input: AddPlanInput) => Promise<PlanExpense>
+  updatePlan: (id: string, input: UpdatePlanInput) => Promise<PlanExpense>
+  deletePlan: (id: string) => Promise<void>
+  markPlanPaid: (id: string, paidDate?: string) => Promise<Expense>
+  addLoan: (input: AddLoanInput) => Promise<Loan>
+  updateLoan: (id: string, input: UpdateLoanInput) => Promise<Loan>
+  deleteLoan: (id: string) => Promise<void>
+  recordLoanPayment: (
+    id: string,
+    amount: number,
+    paidDate?: string,
+  ) => Promise<Expense>
   setBudget: (amount: number) => Promise<Profile>
+  setMonthBudget: (monthKey: string, amount: number) => Promise<MonthBudget>
   setCurrency: (currency: string) => Promise<Profile>
 }
 
@@ -88,6 +162,9 @@ async function enqueueReceiptUpload(expenseId: string, blobKey: string) {
 
 export function LocalDataProvider({ children }: { children: ReactNode }) {
   const [expenses, setExpenses] = useState<Expense[]>([])
+  const [plans, setPlans] = useState<PlanExpense[]>([])
+  const [loans, setLoans] = useState<Loan[]>([])
+  const [monthBudgets, setMonthBudgets] = useState<MonthBudget[]>([])
   const [count, setCount] = useState(0)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [pendingSyncCount, setPendingSyncCount] = useState(0)
@@ -98,16 +175,30 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
     setLoading(true)
     setError(null)
     try {
-      const [items, total, localProfile, pending] = await Promise.all([
+      const [
+        items,
+        total,
+        localProfile,
+        pending,
+        planItems,
+        loanItems,
+        budgetItems,
+      ] = await Promise.all([
         listExpenses(),
         countExpenses(),
         getProfile(),
         countPendingSyncItems(),
+        listPlans(),
+        listLoans(),
+        listMonthBudgets(),
       ])
       setExpenses(items)
       setCount(total)
       setProfile(localProfile)
       setPendingSyncCount(pending)
+      setPlans(planItems)
+      setLoans(loanItems)
+      setMonthBudgets(budgetItems)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load local data')
     } finally {
@@ -236,6 +327,264 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
     [refresh],
   )
 
+  const addPlan = useCallback(
+    async (input: AddPlanInput) => {
+      const currentProfile = await getProfile()
+      const now = new Date().toISOString()
+      const day =
+        input.recurrence === 'monthly'
+          ? (input.day_of_month ?? Number(input.due_date.slice(8, 10)))
+          : null
+
+      const plan: PlanExpense = {
+        id: crypto.randomUUID(),
+        user_id: currentProfile.id,
+        amount: input.amount,
+        category: input.category,
+        description: input.description ?? null,
+        due_date: input.due_date,
+        recurrence: input.recurrence,
+        day_of_month: day,
+        status: 'upcoming',
+        created_at: now,
+        updated_at: now,
+        sync_status: 'pending',
+      }
+
+      await upsertPlan(plan)
+      await enqueueSyncItem({
+        entity: 'plan',
+        operation: 'create',
+        payload: plan,
+      })
+      await refresh()
+      if (navigator.onLine) void flushQueue()
+      return plan
+    },
+    [refresh],
+  )
+
+  const updatePlan = useCallback(
+    async (id: string, input: UpdatePlanInput) => {
+      const existing = await getPlanById(id)
+      if (!existing) throw new Error('Plan not found')
+
+      const day =
+        input.recurrence === 'monthly'
+          ? (input.day_of_month ?? Number(input.due_date.slice(8, 10)))
+          : null
+
+      const plan: PlanExpense = {
+        ...existing,
+        amount: input.amount,
+        category: input.category,
+        description: input.description ?? null,
+        due_date: input.due_date,
+        recurrence: input.recurrence,
+        day_of_month: day,
+        updated_at: new Date().toISOString(),
+        sync_status: 'pending',
+      }
+
+      await upsertPlan(plan)
+      await enqueueSyncItem({
+        entity: 'plan',
+        operation: 'update',
+        payload: plan,
+      })
+      await refresh()
+      if (navigator.onLine) void flushQueue()
+      return plan
+    },
+    [refresh],
+  )
+
+  const deletePlan = useCallback(
+    async (id: string) => {
+      await removePlan(id)
+      await enqueueSyncItem({
+        entity: 'plan',
+        operation: 'delete',
+        payload: { id },
+      })
+      await refresh()
+      if (navigator.onLine) void flushQueue()
+    },
+    [refresh],
+  )
+
+  const markPlanPaid = useCallback(
+    async (id: string, paidDate?: string) => {
+      const plan = await getPlanById(id)
+      if (!plan) throw new Error('Plan not found')
+      if (plan.status !== 'upcoming') throw new Error('Plan already paid')
+
+      const date = paidDate ?? toDateKey()
+      const expense = await addExpense({
+        amount: plan.amount,
+        category: plan.category,
+        description: plan.description ?? `Paid: ${plan.category}`,
+        date,
+      })
+
+      const now = new Date().toISOString()
+      if (plan.recurrence === 'monthly' && plan.day_of_month) {
+        const nextDue = nextMonthlyDueDate(plan.due_date, plan.day_of_month)
+        const updated: PlanExpense = {
+          ...plan,
+          due_date: nextDue,
+          updated_at: now,
+          sync_status: 'pending',
+        }
+        await upsertPlan(updated)
+        await enqueueSyncItem({
+          entity: 'plan',
+          operation: 'update',
+          payload: updated,
+        })
+      } else {
+        const updated: PlanExpense = {
+          ...plan,
+          status: 'paid',
+          updated_at: now,
+          sync_status: 'pending',
+        }
+        await upsertPlan(updated)
+        await enqueueSyncItem({
+          entity: 'plan',
+          operation: 'update',
+          payload: updated,
+        })
+      }
+
+      await refresh()
+      if (navigator.onLine) void flushQueue()
+      return expense
+    },
+    [addExpense, refresh],
+  )
+
+  const addLoan = useCallback(
+    async (input: AddLoanInput) => {
+      const currentProfile = await getProfile()
+      const now = new Date().toISOString()
+
+      const loan: Loan = {
+        id: crypto.randomUUID(),
+        user_id: currentProfile.id,
+        person: input.person.trim(),
+        amount: input.amount,
+        remaining: input.amount,
+        direction: input.direction,
+        loan_date: input.loan_date,
+        due_date: input.due_date,
+        description: input.description ?? null,
+        created_at: now,
+        updated_at: now,
+        sync_status: 'pending',
+      }
+
+      await upsertLoan(loan)
+      await enqueueSyncItem({
+        entity: 'loan',
+        operation: 'create',
+        payload: loan,
+      })
+      await refresh()
+      if (navigator.onLine) void flushQueue()
+      return loan
+    },
+    [refresh],
+  )
+
+  const updateLoan = useCallback(
+    async (id: string, input: UpdateLoanInput) => {
+      const existing = await getLoanById(id)
+      if (!existing) throw new Error('Loan not found')
+
+      const loan: Loan = {
+        ...existing,
+        person: input.person.trim(),
+        amount: input.amount,
+        remaining: input.remaining,
+        direction: input.direction,
+        loan_date: input.loan_date,
+        due_date: input.due_date,
+        description: input.description ?? null,
+        updated_at: new Date().toISOString(),
+        sync_status: 'pending',
+      }
+
+      await upsertLoan(loan)
+      await enqueueSyncItem({
+        entity: 'loan',
+        operation: 'update',
+        payload: loan,
+      })
+      await refresh()
+      if (navigator.onLine) void flushQueue()
+      return loan
+    },
+    [refresh],
+  )
+
+  const deleteLoan = useCallback(
+    async (id: string) => {
+      await removeLoan(id)
+      await enqueueSyncItem({
+        entity: 'loan',
+        operation: 'delete',
+        payload: { id },
+      })
+      await refresh()
+      if (navigator.onLine) void flushQueue()
+    },
+    [refresh],
+  )
+
+  const recordLoanPayment = useCallback(
+    async (id: string, amount: number, paidDate?: string) => {
+      const loan = await getLoanById(id)
+      if (!loan) throw new Error('Loan not found')
+      if (amount <= 0) throw new Error('Payment must be greater than 0')
+      if (amount > loan.remaining) {
+        throw new Error('Payment exceeds remaining balance')
+      }
+
+      const date = paidDate ?? toDateKey()
+      const label =
+        loan.direction === 'borrowed'
+          ? `Loan repayment to ${loan.person}`
+          : `Loan received from ${loan.person}`
+
+      const expense = await addExpense({
+        amount,
+        category: 'Loan Return',
+        description: label,
+        date,
+      })
+
+      const remaining = Math.max(0, Number(loan.remaining) - amount)
+      const updated: Loan = {
+        ...loan,
+        remaining,
+        updated_at: new Date().toISOString(),
+        sync_status: 'pending',
+      }
+      await upsertLoan(updated)
+      await enqueueSyncItem({
+        entity: 'loan',
+        operation: 'update',
+        payload: updated,
+      })
+
+      await refresh()
+      if (navigator.onLine) void flushQueue()
+      return expense
+    },
+    [addExpense, refresh],
+  )
+
   const setBudget = useCallback(
     async (amount: number) => {
       const updated = await updateMonthlyBudget(amount)
@@ -247,6 +596,31 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
       await refresh()
       if (navigator.onLine) void flushQueue()
       return updated
+    },
+    [refresh],
+  )
+
+  const setMonthBudget = useCallback(
+    async (monthKey: string, amount: number) => {
+      const currentProfile = await getProfile()
+      const existing = await getMonthBudget(monthKey)
+      const budget: MonthBudget = {
+        id: existing?.id ?? monthBudgetId(currentProfile.id, monthKey),
+        user_id: currentProfile.id,
+        month_key: monthKey,
+        amount,
+        updated_at: new Date().toISOString(),
+        sync_status: 'pending',
+      }
+      await upsertMonthBudget(budget)
+      await enqueueSyncItem({
+        entity: 'month_budget',
+        operation: existing ? 'update' : 'create',
+        payload: budget,
+      })
+      await refresh()
+      if (navigator.onLine) void flushQueue()
+      return budget
     },
     [refresh],
   )
@@ -275,6 +649,9 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       expenses,
+      plans,
+      loans,
+      monthBudgets,
       count,
       profile,
       pendingSyncCount,
@@ -284,11 +661,23 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
       addExpense,
       updateExpense,
       deleteExpense,
+      addPlan,
+      updatePlan,
+      deletePlan,
+      markPlanPaid,
+      addLoan,
+      updateLoan,
+      deleteLoan,
+      recordLoanPayment,
       setBudget,
+      setMonthBudget,
       setCurrency,
     }),
     [
       expenses,
+      plans,
+      loans,
+      monthBudgets,
       count,
       profile,
       pendingSyncCount,
@@ -298,7 +687,16 @@ export function LocalDataProvider({ children }: { children: ReactNode }) {
       addExpense,
       updateExpense,
       deleteExpense,
+      addPlan,
+      updatePlan,
+      deletePlan,
+      markPlanPaid,
+      addLoan,
+      updateLoan,
+      deleteLoan,
+      recordLoanPayment,
       setBudget,
+      setMonthBudget,
       setCurrency,
     ],
   )
@@ -341,24 +739,76 @@ export function useExpenses() {
   }
 }
 
+export function usePlans() {
+  const {
+    plans,
+    loading,
+    error,
+    refresh,
+    addPlan,
+    updatePlan,
+    deletePlan,
+    markPlanPaid,
+  } = useLocalData()
+
+  return {
+    plans,
+    loading,
+    error,
+    refresh,
+    addPlan,
+    updatePlan,
+    deletePlan,
+    markPlanPaid,
+  }
+}
+
+export function useLoans() {
+  const {
+    loans,
+    loading,
+    error,
+    refresh,
+    addLoan,
+    updateLoan,
+    deleteLoan,
+    recordLoanPayment,
+  } = useLocalData()
+
+  return {
+    loans,
+    loading,
+    error,
+    refresh,
+    addLoan,
+    updateLoan,
+    deleteLoan,
+    recordLoanPayment,
+  }
+}
+
 export function useProfile() {
   const {
     profile,
+    monthBudgets,
     pendingSyncCount,
     loading,
     error,
     refresh,
     setBudget,
+    setMonthBudget,
     setCurrency,
   } = useLocalData()
 
   return {
     profile,
+    monthBudgets,
     pendingSyncCount,
     loading,
     error,
     refresh,
     setBudget,
+    setMonthBudget,
     setCurrency,
   }
 }

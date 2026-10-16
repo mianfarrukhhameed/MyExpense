@@ -16,11 +16,14 @@ import {
   IonToggle,
   useIonToast,
 } from '@ionic/react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { MonthFilterBar } from '../components/common/MonthFilterBar'
 import { PageScaffold } from '../components/common/PageScaffold'
 import { getLastSyncAt } from '../db/sync-meta'
+import { formatMonthLabel, toMonthKey } from '../core/utils/date'
 import { formatMoney } from '../core/utils/money'
 import { platformLabel } from '../core/utils/platform'
+import { resolveBudgetForMonth } from '../db/month-budgets.repo'
 import { useAuth } from '../hooks/useAuth'
 import { useExpenses } from '../hooks/useExpenses'
 import { useProfile } from '../hooks/useProfile'
@@ -43,10 +46,20 @@ function formatSyncTime(iso: string | null): string {
 
 export default function SettingsPage() {
   const { user, logOut, configured } = useAuth()
-  const { profile, pendingSyncCount, loading, setBudget, setCurrency, refresh } =
-    useProfile()
-  const { addExpense, count, refresh: refreshExpenses } = useExpenses()
+  const {
+    profile,
+    monthBudgets,
+    pendingSyncCount,
+    loading,
+    setBudget,
+    setMonthBudget,
+    setCurrency,
+    refresh,
+  } = useProfile()
+  const { addExpense, count, expenses, refresh: refreshExpenses } = useExpenses()
+  const [monthKey, setMonthKey] = useState(() => toMonthKey())
   const [budgetInput, setBudgetInput] = useState('')
+  const [defaultBudgetInput, setDefaultBudgetInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [reminderOn, setReminderOn] = useState(() => getDailyReminderPref())
   const [lastSync, setLastSync] = useState<string | null>(() => getLastSyncAt())
@@ -55,8 +68,23 @@ export default function SettingsPage() {
   const currency = profile?.currency ?? 'USD'
   const online = typeof navigator !== 'undefined' ? navigator.onLine : true
   const fcmReady = isFcmConfigured()
+  const defaultBudget = profile?.monthly_budget ?? 0
+  const monthBudget = useMemo(
+    () => resolveBudgetForMonth(monthBudgets, monthKey, defaultBudget),
+    [monthBudgets, monthKey, defaultBudget],
+  )
+  const monthSpend = useMemo(
+    () =>
+      expenses
+        .filter((item) => item.date.startsWith(monthKey))
+        .reduce((sum, item) => sum + Number(item.amount), 0),
+    [expenses, monthKey],
+  )
+  const hasExplicitMonthBudget = monthBudgets.some(
+    (row) => row.month_key === monthKey,
+  )
 
-  const handleSaveBudget = async () => {
+  const handleSaveMonthBudget = async () => {
     const amount = Number.parseFloat(budgetInput)
     if (Number.isNaN(amount) || amount < 0) {
       await present({
@@ -69,10 +97,35 @@ export default function SettingsPage() {
 
     setBusy(true)
     try {
-      await setBudget(amount)
+      await setMonthBudget(monthKey, amount)
       setBudgetInput('')
       await present({
-        message: 'Budget saved locally',
+        message: `Budget saved for ${formatMonthLabel(monthKey)}`,
+        duration: 2000,
+        color: 'success',
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleSaveDefaultBudget = async () => {
+    const amount = Number.parseFloat(defaultBudgetInput)
+    if (Number.isNaN(amount) || amount < 0) {
+      await present({
+        message: 'Enter a valid default budget',
+        duration: 2000,
+        color: 'danger',
+      })
+      return
+    }
+
+    setBusy(true)
+    try {
+      await setBudget(amount)
+      setDefaultBudgetInput('')
+      await present({
+        message: 'Default monthly budget saved',
         duration: 2000,
         color: 'success',
       })
@@ -266,40 +319,48 @@ export default function SettingsPage() {
 
         <IonCard className="page-card">
           <IonCardHeader>
-            <IonCardTitle>Local profile</IonCardTitle>
+            <IonCardSubtitle>Month-based</IonCardSubtitle>
+            <IonCardTitle>Budget for {formatMonthLabel(monthKey)}</IonCardTitle>
           </IonCardHeader>
           <IonCardContent>
+            <MonthFilterBar
+              monthKey={monthKey}
+              onChange={(key) => setMonthKey(key ?? toMonthKey())}
+            />
             {loading || !profile ? (
               <IonNote>Loading profile…</IonNote>
             ) : (
               <IonList>
                 <IonItem>
                   <IonLabel>
-                    <p>Monthly budget</p>
-                    <h3>{formatMoney(profile.monthly_budget, currency)}</h3>
+                    <p>Effective budget</p>
+                    <h3>{formatMoney(monthBudget, currency)}</h3>
+                    <p className="muted">
+                      {hasExplicitMonthBudget
+                        ? 'Month-specific override'
+                        : 'Using default monthly budget'}
+                    </p>
                   </IonLabel>
                 </IonItem>
                 <IonItem>
                   <IonLabel>
-                    <p>Currency</p>
-                    <h3>{profile.currency}</h3>
+                    <p>Spent this month</p>
+                    <h3>{formatMoney(monthSpend, currency)}</h3>
+                  </IonLabel>
+                </IonItem>
+                <IonItem>
+                  <IonLabel>
+                    <p>Remaining</p>
+                    <h3>{formatMoney(monthBudget - monthSpend, currency)}</h3>
                   </IonLabel>
                 </IonItem>
               </IonList>
             )}
-          </IonCardContent>
-        </IonCard>
-
-        <IonCard className="page-card">
-          <IonCardHeader>
-            <IonCardTitle>Set planned budget</IonCardTitle>
-          </IonCardHeader>
-          <IonCardContent>
             <IonItem>
               <IonInput
                 type="number"
                 inputMode="decimal"
-                label="Amount"
+                label={`Set budget for ${formatMonthLabel(monthKey)}`}
                 labelPlacement="stacked"
                 placeholder="e.g. 500"
                 value={budgetInput}
@@ -310,9 +371,48 @@ export default function SettingsPage() {
               expand="block"
               className="ion-margin-top"
               disabled={busy}
-              onClick={() => void handleSaveBudget()}
+              onClick={() => void handleSaveMonthBudget()}
             >
-              Save budget locally
+              Save month budget
+            </IonButton>
+          </IonCardContent>
+        </IonCard>
+
+        <IonCard className="page-card">
+          <IonCardHeader>
+            <IonCardTitle>Default budget & currency</IonCardTitle>
+          </IonCardHeader>
+          <IonCardContent>
+            {profile && (
+              <IonList>
+                <IonItem>
+                  <IonLabel>
+                    <p>Default monthly budget</p>
+                    <h3>{formatMoney(defaultBudget, currency)}</h3>
+                  </IonLabel>
+                </IonItem>
+              </IonList>
+            )}
+            <IonItem>
+              <IonInput
+                type="number"
+                inputMode="decimal"
+                label="Default amount"
+                labelPlacement="stacked"
+                placeholder="Fallback when month has no override"
+                value={defaultBudgetInput}
+                onIonInput={(event) =>
+                  setDefaultBudgetInput(event.detail.value ?? '')
+                }
+              />
+            </IonItem>
+            <IonButton
+              expand="block"
+              className="ion-margin-top"
+              disabled={busy}
+              onClick={() => void handleSaveDefaultBudget()}
+            >
+              Save default budget
             </IonButton>
             <IonItem className="ion-margin-top">
               <IonSelect
@@ -393,7 +493,7 @@ export default function SettingsPage() {
             </IonButton>
             <IonText color="medium">
               <p className="muted ion-margin-top">
-                Prefer the Expenses tab for logging. Sample write still goes to
+                Prefer the Money tab for logging. Sample write still goes to
                 IndexedDB first; Sync now / online flush pushes to Supabase.
               </p>
             </IonText>

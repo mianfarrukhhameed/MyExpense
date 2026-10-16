@@ -7,6 +7,9 @@ import { setDailyReminderPref } from '../push/fcm'
 import { getDb } from './index'
 import {
   STORE_EXPENSES,
+  STORE_LOANS,
+  STORE_MONTH_BUDGETS,
+  STORE_PLANS,
   STORE_PROFILE,
   STORE_RECEIPT_BLOBS,
   STORE_SYNC_QUEUE,
@@ -24,6 +27,9 @@ export async function clearLocalWorkspace(): Promise<void> {
     db.clear(STORE_PROFILE),
     db.clear(STORE_SYNC_QUEUE),
     db.clear(STORE_RECEIPT_BLOBS),
+    db.clear(STORE_PLANS),
+    db.clear(STORE_LOANS),
+    db.clear(STORE_MONTH_BUDGETS),
   ])
   clearSyncWatermarks()
   localStorage.removeItem(GUEST_PROFILE_KEY)

@@ -3,11 +3,21 @@ import {
   DEFAULT_MONTHLY_BUDGET,
 } from '../core/config/app.config'
 import type { Expense } from '../core/types/expense'
+import type { Loan } from '../core/types/loan'
+import type { MonthBudget } from '../core/types/month-budget'
+import type { PlanExpense } from '../core/types/plan'
 import type { Profile } from '../core/types/profile'
 import { getDb } from './index'
 import { listExpenses, upsertExpense } from './expenses.repo'
+import { listLoans, upsertLoan } from './loans.repo'
+import {
+  listMonthBudgets,
+  monthBudgetId,
+  upsertMonthBudget,
+} from './month-budgets.repo'
+import { listPlans, upsertPlan } from './plans.repo'
 import { getProfile, upsertProfile } from './profile.repo'
-import { STORE_PROFILE } from './schema'
+import { STORE_MONTH_BUDGETS, STORE_PROFILE } from './schema'
 import {
   clearLocalWorkspace,
   createEmptyProfileForUser,
@@ -26,8 +36,14 @@ export type BindLocalDataResult = {
 
 /** True when local data is more than empty USD / 0 budget defaults. */
 export async function hasMeaningfulLocalGuestData(): Promise<boolean> {
-  const expenses = await listExpenses()
-  if (expenses.length > 0) return true
+  const [expenses, plans, loans, monthBudgets] = await Promise.all([
+    listExpenses(),
+    listPlans(),
+    listLoans(),
+    listMonthBudgets(),
+  ])
+  if (expenses.length > 0 || plans.length > 0 || loans.length > 0) return true
+  if (monthBudgets.length > 0) return true
 
   try {
     const profile = await getProfile()
@@ -40,7 +56,7 @@ export async function hasMeaningfulLocalGuestData(): Promise<boolean> {
 }
 
 /**
- * Re-key local guest profile + expenses to the authenticated Supabase user id.
+ * Re-key local guest profile + rows to the authenticated Supabase user id.
  */
 export async function migrateGuestDataToUser(userId: string): Promise<Profile> {
   const db = await getDb()
@@ -61,6 +77,44 @@ export async function migrateGuestDataToUser(userId: string): Promise<Profile> {
       sync_status: 'pending',
     }
     await upsertExpense(next)
+  }
+
+  const plans = await listPlans()
+  for (const plan of plans) {
+    const next: PlanExpense = {
+      ...plan,
+      user_id: userId,
+      updated_at: now,
+      sync_status: 'pending',
+    }
+    await upsertPlan(next)
+  }
+
+  const loans = await listLoans()
+  for (const loan of loans) {
+    const next: Loan = {
+      ...loan,
+      user_id: userId,
+      updated_at: now,
+      sync_status: 'pending',
+    }
+    await upsertLoan(next)
+  }
+
+  const monthBudgets = await listMonthBudgets()
+  for (const budget of monthBudgets) {
+    const oldId = budget.id
+    const next: MonthBudget = {
+      ...budget,
+      id: monthBudgetId(userId, budget.month_key),
+      user_id: userId,
+      updated_at: now,
+      sync_status: 'pending',
+    }
+    if (oldId !== next.id) {
+      await db.delete(STORE_MONTH_BUDGETS, oldId)
+    }
+    await upsertMonthBudget(next)
   }
 
   await db.delete(STORE_PROFILE, current.id)

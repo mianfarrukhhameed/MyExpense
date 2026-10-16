@@ -18,6 +18,9 @@ import {
   clearLocalWorkspace,
 } from '../db/migration.repo'
 import { listExpenses } from '../db/expenses.repo'
+import { listLoans } from '../db/loans.repo'
+import { listMonthBudgets } from '../db/month-budgets.repo'
+import { listPlans } from '../db/plans.repo'
 import { enqueueSyncItem } from '../db/sync-queue.repo'
 import {
   getSession,
@@ -32,6 +35,9 @@ import {
   ensureRemoteProfile,
   flushQueue,
   pushAllLocalExpenses,
+  pushAllLocalLoans,
+  pushAllLocalMonthBudgets,
+  pushAllLocalPlans,
   startSyncListeners,
   syncNow,
 } from '../services/sync/sync-engine'
@@ -79,6 +85,14 @@ async function bootstrapAuthenticatedUser(user: User): Promise<void> {
     if (expenses.length > 0) {
       await pushAllLocalExpenses(user.id)
     }
+    const [plans, loans, monthBudgets] = await Promise.all([
+      listPlans(),
+      listLoans(),
+      listMonthBudgets(),
+    ])
+    if (plans.length > 0) await pushAllLocalPlans(user.id)
+    if (loans.length > 0) await pushAllLocalLoans(user.id)
+    if (monthBudgets.length > 0) await pushAllLocalMonthBudgets(user.id)
     await flushQueue()
     // Merge with cloud (preserves remote budget if we did not push defaults)
     await hydrateFromRemote()

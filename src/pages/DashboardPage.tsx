@@ -7,7 +7,8 @@ import {
   IonCardTitle,
   IonNote,
 } from '@ionic/react'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
+import { MonthFilterBar } from '../components/common/MonthFilterBar'
 import { BudgetMeter } from '../components/dashboard/BudgetMeter'
 import { BurnRateIndicator } from '../components/dashboard/BurnRateIndicator'
 import { MonthCompareChart } from '../components/dashboard/MonthCompareChart'
@@ -17,35 +18,50 @@ import {
   summarizeBurnRate,
   summarizeMonthBudget,
 } from '../core/utils/budget'
-import { toMonthKey } from '../core/utils/date'
+import { formatMonthLabel, toMonthKey } from '../core/utils/date'
+import { resolveBudgetForMonth } from '../db/month-budgets.repo'
 import { useExpenses } from '../hooks/useExpenses'
 import { useProfile } from '../hooks/useProfile'
 
 export default function DashboardPage() {
   const { expenses, loading: expensesLoading } = useExpenses()
-  const { profile, loading: profileLoading } = useProfile()
+  const { profile, monthBudgets, loading: profileLoading } = useProfile()
+  const [monthKey, setMonthKey] = useState(() => toMonthKey())
 
   const loading = expensesLoading || profileLoading
   const currency = profile?.currency ?? 'USD'
-  const budget = profile?.monthly_budget ?? 0
-  const monthKey = toMonthKey()
+  const defaultBudget = profile?.monthly_budget ?? 0
+  const budget = useMemo(
+    () => resolveBudgetForMonth(monthBudgets, monthKey, defaultBudget),
+    [monthBudgets, monthKey, defaultBudget],
+  )
 
   const summary = useMemo(
     () => summarizeMonthBudget(expenses, budget, monthKey),
     [expenses, budget, monthKey],
   )
   const burn = useMemo(
-    () => summarizeBurnRate(summary.spent, budget),
-    [summary.spent, budget],
+    () =>
+      summarizeBurnRate(
+        summary.spent,
+        budget,
+        monthKey === toMonthKey() ? new Date() : new Date(`${monthKey}-01`),
+      ),
+    [summary.spent, budget, monthKey],
   )
   const months = useMemo(() => monthTotals(expenses, 12), [expenses])
 
   return (
     <PageScaffold title="Dashboard">
       <div className="page-section">
+        <MonthFilterBar
+          monthKey={monthKey}
+          onChange={(key) => setMonthKey(key ?? toMonthKey())}
+        />
+
         <IonCard className="page-card">
           <IonCardHeader>
-            <IonCardSubtitle>{monthKey}</IonCardSubtitle>
+            <IonCardSubtitle>{formatMonthLabel(monthKey)}</IonCardSubtitle>
             <IonCardTitle>Budget overview</IonCardTitle>
           </IonCardHeader>
           <IonCardContent>
@@ -60,7 +76,7 @@ export default function DashboardPage() {
                   size="small"
                   className="ion-margin-top"
                 >
-                  Edit budget in Settings
+                  Edit month budget in Settings
                 </IonButton>
               </>
             )}
