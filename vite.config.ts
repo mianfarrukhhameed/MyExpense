@@ -100,6 +100,8 @@ export default defineConfig(({ mode }) => {
         workbox: {
           navigateFallback: 'index.html',
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+          // Main Ionic/Recharts bundle is ~2.1 MB; default Workbox limit is 2 MiB
+          maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
           // Order matters: config → Firebase push → sync helpers
           importScripts: [
             'firebase-sw-config.js',
