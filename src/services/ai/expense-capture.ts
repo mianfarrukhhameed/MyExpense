@@ -29,7 +29,21 @@ export async function loadCaptureCapabilities(
 export async function captureExpenseFromVoice(
   onProgress?: CaptureProgress,
 ): Promise<ExpenseDraft> {
-  const caps = await loadCaptureCapabilities()
+  const caps = await loadCaptureCapabilities(true)
+
+  // Desktop: Prompt API only — never fall back to Web Speech
+  if (caps.desktopPromptPreferred) {
+    if (!caps.promptAudio) {
+      throw new Error(
+        'AI voice needs desktop Chrome/Edge with Prompt API (audio). Check chrome://on-device-internals — model may need download + GPU.',
+      )
+    }
+    onProgress?.('Listening (AI)…')
+    const audio = await recordAudioBlob(6500)
+    onProgress?.('Understanding… first AI use may download the model')
+    return parseExpenseWithPromptAudio(audio)
+  }
+
   if (!canCaptureVoice(caps)) {
     throw new Error('Voice entry is not supported on this device')
   }

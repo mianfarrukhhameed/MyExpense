@@ -3,11 +3,23 @@ import type { ExpenseDraft } from '../../core/types/expense-draft'
 import { toDateKey } from '../../core/utils/date'
 import { getLanguageModelApi } from './capability'
 import { localParseExpense } from './local-parse'
+import { decodeAudioBlob } from './speech'
+
+type PromptContentPart = {
+  type: 'text' | 'image' | 'audio'
+  value: unknown
+}
+
+type PromptMessage =
+  | string
+  | {
+      role: 'user' | 'system' | 'assistant'
+      content: string | PromptContentPart[]
+      prefix?: boolean
+    }
 
 type PromptSession = {
-  prompt: (
-    input: string | Array<string | { type: string; value: unknown }>,
-  ) => Promise<string>
+  prompt: (input: string | PromptMessage[]) => Promise<string>
   destroy?: () => void
 }
 
@@ -71,18 +83,34 @@ async function createSession(
   const lm = getLanguageModelApi()
   if (!lm) throw new Error('Prompt API is not available')
 
-  const session = (await lm.create({
-    expectedInputs,
-    expectedOutputs: [{ type: 'text', languages: ['en'] }],
-    initialPrompts: [
-      {
-        role: 'system',
-        content: buildSystemPrompt(),
+  try {
+    const session = (await lm.create({
+      expectedInputs,
+      expectedOutputs: [{ type: 'text', languages: ['en'] }],
+      initialPrompts: [
+        {
+          role: 'system',
+          content: buildSystemPrompt(),
+        },
+      ],
+      monitor(m: {
+        addEventListener: (
+          type: string,
+          cb: (e: { loaded?: number; total?: number }) => void,
+        ) => void
+      }) {
+        m.addEventListener('downloadprogress', () => {
+          /* model download in progress — UI toast handles wait time */
+        })
       },
-    ],
-  })) as PromptSession
-
-  return session
+    })) as PromptSession
+    return session
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(
+      `Could not start on-device AI (${message}). Open chrome://on-device-internals and ensure the model is downloaded.`,
+    )
+  }
 }
 
 export async function parseExpenseWithPromptText(
@@ -109,10 +137,15 @@ export async function parseExpenseWithPromptImage(
   try {
     const raw = await session.prompt([
       {
-        type: 'text',
-        value: 'Parse the expense from this receipt image.',
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            value: 'Parse the expense from this receipt image.',
+          },
+          { type: 'image', value: imageBlob },
+        ],
       },
-      { type: 'image', value: imageBlob },
     ])
     return parseJsonDraft(raw, raw)
   } finally {
@@ -123,6 +156,7 @@ export async function parseExpenseWithPromptImage(
 export async function parseExpenseWithPromptAudio(
   audioBlob: Blob,
 ): Promise<ExpenseDraft> {
+  const audioBuffer = await decodeAudioBlob(audioBlob)
   const session = await createSession([
     { type: 'text', languages: ['en'] },
     { type: 'audio' },
@@ -130,12 +164,23 @@ export async function parseExpenseWithPromptAudio(
   try {
     const raw = await session.prompt([
       {
-        type: 'text',
-        value: 'Transcribe and parse the spoken expense.',
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            value:
+              'Transcribe the spoken expense and return only the JSON object described in the system prompt.',
+          },
+          { type: 'audio', value: audioBuffer },
+        ],
       },
-      { type: 'audio', value: audioBlob },
     ])
     return parseJsonDraft(raw, raw)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(
+      `AI voice failed (${message}). Needs desktop Chrome with GPU and a downloaded Prompt API model.`,
+    )
   } finally {
     session.destroy?.()
   }

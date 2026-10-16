@@ -7,6 +7,8 @@ export interface CaptureCapabilities {
   speech: boolean
   translator: boolean
   languageDetector: boolean
+  /** Desktop Chromium (Chrome/Edge) — Prompt API preferred, no speech fallback. */
+  desktopPromptPreferred: boolean
 }
 
 type LanguageModelLike = {
@@ -45,6 +47,16 @@ function getLanguageDetector(): LanguageDetectorLike | null {
   return g.LanguageDetector ?? null
 }
 
+/** True for non-mobile desktop browsers that can host Chrome built-in AI. */
+export function isDesktopPromptHost(): boolean {
+  if (typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent
+  const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua)
+  if (mobile) return false
+  // Chrome, Edge, Opera, Brave (Chromium family)
+  return /Chrome\//.test(ua) || /Edg\//.test(ua) || /OPR\//.test(ua)
+}
+
 export function hasSpeechRecognition(): boolean {
   const w = window as unknown as {
     SpeechRecognition?: unknown
@@ -55,6 +67,8 @@ export function hasSpeechRecognition(): boolean {
 
 async function isPromptReady(
   expectedInputs: Array<{ type: string; languages?: string[] }>,
+  /** Multimodal audio/image often fail unless the model is fully downloaded. */
+  requireAvailable = false,
 ): Promise<boolean> {
   const lm = getLanguageModel()
   if (!lm?.availability) return false
@@ -63,6 +77,7 @@ async function isPromptReady(
       expectedInputs,
       expectedOutputs: [{ type: 'text', languages: ['en'] }],
     })
+    if (requireAvailable) return status === 'available'
     return status === 'available' || status === 'downloadable'
   } catch {
     return false
@@ -71,6 +86,7 @@ async function isPromptReady(
 
 export async function getCaptureCapabilities(): Promise<CaptureCapabilities> {
   const speech = hasSpeechRecognition()
+  const desktopPromptPreferred = isDesktopPromptHost()
   let promptText = false
   let promptImage = false
   let promptAudio = false
@@ -86,19 +102,20 @@ export async function getCaptureCapabilities(): Promise<CaptureCapabilities> {
   }
 
   try {
-    promptImage = await isPromptReady([
-      { type: 'text', languages: ['en'] },
-      { type: 'image' },
-    ])
+    // Allow downloadable — LanguageModel.create() will fetch the model
+    promptImage = await isPromptReady(
+      [{ type: 'text', languages: ['en'] }, { type: 'image' }],
+      false,
+    )
   } catch {
     promptImage = false
   }
 
   try {
-    promptAudio = await isPromptReady([
-      { type: 'text', languages: ['en'] },
-      { type: 'audio' },
-    ])
+    promptAudio = await isPromptReady(
+      [{ type: 'text', languages: ['en'] }, { type: 'audio' }],
+      false,
+    )
   } catch {
     promptAudio = false
   }
@@ -134,6 +151,7 @@ export async function getCaptureCapabilities(): Promise<CaptureCapabilities> {
     speech,
     translator,
     languageDetector,
+    desktopPromptPreferred,
   }
 }
 
@@ -150,6 +168,8 @@ export function getLanguageDetectorApi(): LanguageDetectorLike | null {
 }
 
 export function canCaptureVoice(caps: CaptureCapabilities): boolean {
+  // Desktop Chromium: Prompt audio only (no Web Speech fallback)
+  if (caps.desktopPromptPreferred) return caps.promptAudio
   return caps.promptAudio || caps.speech
 }
 

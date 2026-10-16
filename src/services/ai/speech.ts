@@ -100,9 +100,11 @@ export async function recordAudioBlob(durationMs = 6000): Promise<Blob> {
   }
 
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-  const mimeType = MediaRecorder.isTypeSupported('audio/webm')
-    ? 'audio/webm'
-    : 'audio/mp4'
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : MediaRecorder.isTypeSupported('audio/webm')
+      ? 'audio/webm'
+      : 'audio/mp4'
 
   return new Promise((resolve, reject) => {
     const chunks: BlobPart[] = []
@@ -124,15 +126,41 @@ export async function recordAudioBlob(durationMs = 6000): Promise<Blob> {
     recorder.onstop = () => {
       window.clearTimeout(timer)
       stream.getTracks().forEach((track) => track.stop())
-      resolve(new Blob(chunks, { type: mimeType }))
+      const blob = new Blob(chunks, { type: mimeType.split(';')[0] })
+      if (blob.size === 0) {
+        reject(new Error('No audio captured — try again'))
+        return
+      }
+      resolve(blob)
     }
 
     try {
-      recorder.start()
+      // Timeslice so dataavailable fires reliably before stop
+      recorder.start(250)
     } catch (err) {
       window.clearTimeout(timer)
       stream.getTracks().forEach((track) => track.stop())
       reject(err instanceof Error ? err : new Error('Could not record audio'))
     }
   })
+}
+
+/** Decode a recorded Blob into an AudioBuffer for the Prompt API. */
+export async function decodeAudioBlob(blob: Blob): Promise<AudioBuffer> {
+  const Ctx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext
+  if (!Ctx) throw new Error('Web Audio is not available')
+
+  const ctx = new Ctx()
+  try {
+    const bytes = await blob.arrayBuffer()
+    // decodeAudioData may detach the buffer; pass a copy
+    return await ctx.decodeAudioData(bytes.slice(0))
+  } catch {
+    throw new Error('Could not decode recorded audio for AI')
+  } finally {
+    await ctx.close().catch(() => undefined)
+  }
 }

@@ -51,10 +51,10 @@ Offline-first personal expense tracker PWA (Ionic React + IndexedDB + Supabase).
 ### Voice & receipt expense capture (on-device)
 
 - Expenses FAB expands to **Add**, **Voice** (mic), **Scan** (camera)
-- Prefers Chrome **Prompt API** (text/image/audio) when available; otherwise **Web Speech** + rules / **Tesseract.js** OCR + rules
-- Optional Language Detector + Translator when present (desktop Chrome)
+- **Desktop Chrome/Edge:** Voice uses **Prompt API audio only** (AudioBuffer + multimodal prompt). No Web Speech fallback. Model must be `available` (see `chrome://on-device-internals`); GPU required for audio.
+- **Mobile / no Prompt audio:** Voice uses Web Speech + rules (when available)
+- Receipts: Prompt image when available, else **Tesseract.js** OCR + rules
 - Always opens **Confirm expense** form before save — never auto-saves
-- Best on desktop Chrome; iOS PWA: Scan/OCR works; Voice may be limited/unavailable
 
 ## Supabase setup
 
