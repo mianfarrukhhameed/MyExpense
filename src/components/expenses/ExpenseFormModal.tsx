@@ -17,10 +17,13 @@ import {
   useIonToast,
 } from '@ionic/react'
 import { useEffect, useRef, useState } from 'react'
+import { AiSuggestion } from '../common/AiSuggestion'
 import { EXPENSE_CATEGORIES } from '../../core/config/app.config'
 import type { ExpenseDraft } from '../../core/types/expense-draft'
 import type { Expense } from '../../core/types/expense'
 import { toDateKey } from '../../core/utils/date'
+import { useCategorySuggest } from '../../hooks/useCategorySuggest'
+import { useDescriptionSuggest } from '../../hooks/useDescriptionSuggest'
 import { getReceiptDisplayUrl } from '../../services/storage/receipts'
 
 export interface ExpenseFormValues {
@@ -59,6 +62,18 @@ export function ExpenseFormModal({
   const [present] = useIonToast()
   const fileRef = useRef<HTMLInputElement>(null)
   const objectUrlRef = useRef<string | null>(null)
+  const suggestOnMount = Boolean(
+    (draft && draft.description) || (expense && expense.description),
+  )
+  const descSuggest = useDescriptionSuggest(description, {
+    enabled: isOpen,
+    category,
+    suggestOnMount,
+  })
+  const catSuggest = useCategorySuggest(description, category, {
+    enabled: isOpen,
+    suggestOnMount,
+  })
 
   useEffect(() => {
     if (!isOpen) return
@@ -246,6 +261,16 @@ export function ExpenseFormModal({
               ))}
             </IonSelect>
           </IonItem>
+          <AiSuggestion
+            label="Suggested category"
+            value={catSuggest.suggestion?.category ?? null}
+            loading={catSuggest.loading}
+            onAccept={() => {
+              const next = catSuggest.accept()
+              if (next) setCategory(next)
+            }}
+            onDismiss={catSuggest.dismiss}
+          />
           <IonItem>
             <IonInput
               label="Description"
@@ -255,6 +280,16 @@ export function ExpenseFormModal({
               onIonInput={(event) => setDescription(event.detail.value ?? '')}
             />
           </IonItem>
+          <AiSuggestion
+            label="Suggested description"
+            value={descSuggest.suggestion}
+            loading={descSuggest.loading}
+            onAccept={() => {
+              const next = descSuggest.accept()
+              if (next) setDescription(next)
+            }}
+            onDismiss={descSuggest.dismiss}
+          />
         </IonList>
 
         <IonItem lines="none" className="ion-margin-top">

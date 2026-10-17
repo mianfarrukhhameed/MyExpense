@@ -147,9 +147,46 @@ body {
   text-align: center;
 }
 
+.money-search-wrap {
+  margin: 4px 0 8px;
+}
+
 .money-search {
   padding-inline: 0;
-  margin: 4px 0 8px;
+  margin: 0;
+}
+
+.search-mode-segment {
+  margin: 0 0 4px;
+}
+
+.ai-suggestion {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px 12px;
+}
+
+.ai-suggestion-text {
+  flex: 1 1 100%;
+  line-height: 1.35;
+}
+
+.ai-suggestion-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.ai-suggestion-spinner {
+  width: 18px;
+  height: 18px;
+}
+
+.financial-review-text {
+  margin: 0;
+  line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 .list-total-bar {

@@ -1,4 +1,8 @@
-export type AiAvailability = 'unavailable' | 'downloadable' | 'downloading' | 'available'
+export type AiAvailability =
+  | 'unavailable'
+  | 'downloadable'
+  | 'downloading'
+  | 'available'
 
 export interface CaptureCapabilities {
   promptText: boolean
@@ -7,6 +11,9 @@ export interface CaptureCapabilities {
   speech: boolean
   translator: boolean
   languageDetector: boolean
+  writer: boolean
+  rewriter: boolean
+  embedder: boolean
   /** Desktop Chromium (Chrome/Edge) — Prompt API preferred, no speech fallback. */
   desktopPromptPreferred: boolean
 }
@@ -32,6 +39,21 @@ type LanguageDetectorLike = {
   create: () => Promise<unknown>
 }
 
+type WriterLike = {
+  availability: (options?: unknown) => Promise<AiAvailability>
+  create: (options?: unknown) => Promise<unknown>
+}
+
+type RewriterLike = {
+  availability: (options?: unknown) => Promise<AiAvailability>
+  create: (options?: unknown) => Promise<unknown>
+}
+
+type SemanticEmbedderLike = {
+  availability: (options?: unknown) => Promise<AiAvailability>
+  create: (options?: unknown) => Promise<unknown>
+}
+
 function getLanguageModel(): LanguageModelLike | null {
   const g = globalThis as { LanguageModel?: LanguageModelLike }
   return g.LanguageModel ?? null
@@ -47,13 +69,34 @@ function getLanguageDetector(): LanguageDetectorLike | null {
   return g.LanguageDetector ?? null
 }
 
+function getWriter(): WriterLike | null {
+  const g = globalThis as { Writer?: WriterLike }
+  return g.Writer ?? null
+}
+
+function getRewriter(): RewriterLike | null {
+  const g = globalThis as { Rewriter?: RewriterLike }
+  return g.Rewriter ?? null
+}
+
+function getSemanticEmbedder(): SemanticEmbedderLike | null {
+  const g = globalThis as {
+    SemanticEmbedder?: SemanticEmbedderLike
+    Embedder?: SemanticEmbedderLike
+  }
+  return g.SemanticEmbedder ?? g.Embedder ?? null
+}
+
+export function isAiSurfaceReady(status: AiAvailability): boolean {
+  return status === 'available' || status === 'downloadable'
+}
+
 /** True for non-mobile desktop browsers that can host Chrome built-in AI. */
 export function isDesktopPromptHost(): boolean {
   if (typeof navigator === 'undefined') return false
   const ua = navigator.userAgent
   const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua)
   if (mobile) return false
-  // Chrome, Edge, Opera, Brave (Chromium family)
   return /Chrome\//.test(ua) || /Edg\//.test(ua) || /OPR\//.test(ua)
 }
 
@@ -67,7 +110,6 @@ export function hasSpeechRecognition(): boolean {
 
 async function isPromptReady(
   expectedInputs: Array<{ type: string; languages?: string[] }>,
-  /** Multimodal audio/image often fail unless the model is fully downloaded. */
   requireAvailable = false,
 ): Promise<boolean> {
   const lm = getLanguageModel()
@@ -78,7 +120,17 @@ async function isPromptReady(
       expectedOutputs: [{ type: 'text', languages: ['en'] }],
     })
     if (requireAvailable) return status === 'available'
-    return status === 'available' || status === 'downloadable'
+    return isAiSurfaceReady(status)
+  } catch {
+    return false
+  }
+}
+
+async function isNamedAiReady(
+  check: () => Promise<AiAvailability>,
+): Promise<boolean> {
+  try {
+    return isAiSurfaceReady(await check())
   } catch {
     return false
   }
@@ -92,17 +144,17 @@ export async function getCaptureCapabilities(): Promise<CaptureCapabilities> {
   let promptAudio = false
   let translator = false
   let languageDetector = false
+  let writer = false
+  let rewriter = false
+  let embedder = false
 
   try {
-    promptText = await isPromptReady([
-      { type: 'text', languages: ['en'] },
-    ])
+    promptText = await isPromptReady([{ type: 'text', languages: ['en'] }])
   } catch {
     promptText = false
   }
 
   try {
-    // Allow downloadable — LanguageModel.create() will fetch the model
     promptImage = await isPromptReady(
       [{ type: 'text', languages: ['en'] }, { type: 'image' }],
       false,
@@ -122,26 +174,44 @@ export async function getCaptureCapabilities(): Promise<CaptureCapabilities> {
 
   const detector = getLanguageDetector()
   if (detector?.availability) {
-    try {
-      const status = await detector.availability()
-      languageDetector =
-        status === 'available' || status === 'downloadable'
-    } catch {
-      languageDetector = false
-    }
+    languageDetector = await isNamedAiReady(() => detector.availability())
   }
 
   const translatorApi = getTranslator()
   if (translatorApi?.availability) {
-    try {
-      const status = await translatorApi.availability({
+    translator = await isNamedAiReady(() =>
+      translatorApi.availability({
         sourceLanguage: 'ur',
         targetLanguage: 'en',
-      })
-      translator = status === 'available' || status === 'downloadable'
-    } catch {
-      translator = false
-    }
+      }),
+    )
+  }
+
+  const writerApi = getWriter()
+  if (writerApi?.availability) {
+    writer = await isNamedAiReady(() =>
+      writerApi.availability({
+        expectedInputLanguages: ['en'],
+        expectedContextLanguages: ['en'],
+        outputLanguage: 'en',
+      }),
+    )
+  }
+
+  const rewriterApi = getRewriter()
+  if (rewriterApi?.availability) {
+    rewriter = await isNamedAiReady(() =>
+      rewriterApi.availability({
+        expectedInputLanguages: ['en'],
+        expectedContextLanguages: ['en'],
+        outputLanguage: 'en',
+      }),
+    )
+  }
+
+  const embedderApi = getSemanticEmbedder()
+  if (embedderApi?.availability) {
+    embedder = await isNamedAiReady(() => embedderApi.availability())
   }
 
   return {
@@ -151,6 +221,9 @@ export async function getCaptureCapabilities(): Promise<CaptureCapabilities> {
     speech,
     translator,
     languageDetector,
+    writer,
+    rewriter,
+    embedder,
     desktopPromptPreferred,
   }
 }
@@ -167,12 +240,23 @@ export function getLanguageDetectorApi(): LanguageDetectorLike | null {
   return getLanguageDetector()
 }
 
+export function getWriterApi(): WriterLike | null {
+  return getWriter()
+}
+
+export function getRewriterApi(): RewriterLike | null {
+  return getRewriter()
+}
+
+export function getSemanticEmbedderApi(): SemanticEmbedderLike | null {
+  return getSemanticEmbedder()
+}
+
 export function canCaptureVoice(caps: CaptureCapabilities): boolean {
-  // Desktop Chromium: Prompt audio only (no Web Speech fallback)
   if (caps.desktopPromptPreferred) return caps.promptAudio
   return caps.promptAudio || caps.speech
 }
 
 export function canCaptureReceipt(_caps?: CaptureCapabilities): boolean {
-  return true // Tesseract always available after lazy load
+  return true
 }

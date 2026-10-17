@@ -17,9 +17,11 @@ import {
   useIonToast,
 } from '@ionic/react'
 import { useEffect, useState } from 'react'
+import { AiSuggestion } from '../common/AiSuggestion'
 import { EXPENSE_CATEGORIES } from '../../core/config/app.config'
 import type { PlanExpense, PlanRecurrence } from '../../core/types/plan'
 import { toDateKey } from '../../core/utils/date'
+import { useDescriptionSuggest } from '../../hooks/useDescriptionSuggest'
 
 export interface PlanFormValues {
   amount: number
@@ -50,6 +52,11 @@ export function PlanFormModal({
   const [monthly, setMonthly] = useState(false)
   const [saving, setSaving] = useState(false)
   const [present] = useIonToast()
+  const descSuggest = useDescriptionSuggest(description, {
+    enabled: isOpen,
+    category,
+    suggestOnMount: Boolean(plan?.description),
+  })
 
   useEffect(() => {
     if (!isOpen) return
@@ -147,6 +154,16 @@ export function PlanFormModal({
               onIonInput={(event) => setDescription(event.detail.value ?? '')}
             />
           </IonItem>
+          <AiSuggestion
+            label="Suggested description"
+            value={descSuggest.suggestion}
+            loading={descSuggest.loading}
+            onAccept={() => {
+              const next = descSuggest.accept()
+              if (next) setDescription(next)
+            }}
+            onDismiss={descSuggest.dismiss}
+          />
           <IonItem>
             <IonToggle
               checked={monthly}

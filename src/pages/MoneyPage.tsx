@@ -23,7 +23,10 @@ import {
 import { ListTotalBar } from '../components/common/ListTotalBar'
 import { MonthFilterBar } from '../components/common/MonthFilterBar'
 import { PageScaffold } from '../components/common/PageScaffold'
-import { SearchBar } from '../components/common/SearchBar'
+import {
+  SearchBar,
+  type SearchMode,
+} from '../components/common/SearchBar'
 import {
   ExpenseFormModal,
   type ExpenseFormValues,
@@ -66,12 +69,30 @@ import {
   stopVoiceHold,
   type VoiceHoldMode,
 } from '../services/ai/expense-capture'
+import {
+  backfillSearchIndex,
+  indexSearchDocument,
+  isSemanticSearchAvailable,
+  removeSearchDocument,
+  semanticRankIds,
+} from '../services/ai/search-index'
 
 type MoneySegment = 'expenses' | 'plans' | 'loans'
+
+const SEARCH_MODE_KEY = 'myexpense:search_mode'
 
 function matchesSearch(haystack: string, query: string): boolean {
   if (!query.trim()) return true
   return haystack.toLowerCase().includes(query.trim().toLowerCase())
+}
+
+function readSearchMode(): SearchMode {
+  try {
+    const raw = localStorage.getItem(SEARCH_MODE_KEY)
+    return raw === 'similar' ? 'similar' : 'contains'
+  } catch {
+    return 'contains'
+  }
 }
 
 export default function MoneyPage() {
@@ -103,6 +124,13 @@ export default function MoneyPage() {
   const [segment, setSegment] = useState<MoneySegment>('expenses')
   const [monthKey, setMonthKey] = useState<string | null>(() => toMonthKey())
   const [search, setSearch] = useState('')
+  const [searchMode, setSearchMode] = useState<SearchMode>(() => readSearchMode())
+  const [similarAvailable, setSimilarAvailable] = useState(false)
+  const [semanticExpenseIds, setSemanticExpenseIds] = useState<string[] | null>(
+    null,
+  )
+  const [semanticPlanIds, setSemanticPlanIds] = useState<string[] | null>(null)
+  const [semanticLoanIds, setSemanticLoanIds] = useState<string[] | null>(null)
   const [present] = useIonToast()
   const scanInputRef = useRef<HTMLInputElement>(null)
 
@@ -122,52 +150,157 @@ export default function MoneyPage() {
 
   useEffect(() => {
     void loadCaptureCapabilities().then(setCaps)
+    void isSemanticSearchAvailable().then((ok) => {
+      setSimilarAvailable(ok)
+      if (!ok) {
+        setSearchMode((prev) => {
+          if (prev !== 'similar') return prev
+          localStorage.setItem(SEARCH_MODE_KEY, 'contains')
+          return 'contains'
+        })
+      }
+    })
   }, [])
 
+  useEffect(() => {
+    if (!similarAvailable) return
+    void backfillSearchIndex(
+      'expense',
+      expenses.map((item) => ({
+        id: item.id,
+        text: `${item.category} ${item.description ?? ''} ${item.amount}`,
+      })),
+    )
+    void backfillSearchIndex(
+      'plan',
+      plans.map((item) => ({
+        id: item.id,
+        text: `${item.category} ${item.description ?? ''} ${item.amount}`,
+      })),
+    )
+    void backfillSearchIndex(
+      'loan',
+      loans.map((item) => ({
+        id: item.id,
+        text: `${item.person} ${item.description ?? ''} ${item.direction} ${item.amount}`,
+      })),
+    )
+  }, [similarAvailable, expenses, plans, loans])
+
+  const monthExpenses = useMemo(() => {
+    if (!monthKey) return expenses
+    return expenses.filter((item) => toMonthKey(item.date) === monthKey)
+  }, [expenses, monthKey])
+
+  const monthPlans = useMemo(
+    () =>
+      filterPlansByMonth(
+        plans.filter((plan) => plan.status === 'upcoming'),
+        monthKey,
+      ),
+    [plans, monthKey],
+  )
+
+  const monthLoans = useMemo(
+    () => filterLoansByMonth(loans, monthKey),
+    [loans, monthKey],
+  )
+
+  useEffect(() => {
+    if (searchMode !== 'similar' || !search.trim() || !similarAvailable) {
+      setSemanticExpenseIds(null)
+      setSemanticPlanIds(null)
+      setSemanticLoanIds(null)
+      return
+    }
+
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const [expenseIds, planIds, loanIds] = await Promise.all([
+          semanticRankIds(
+            'expense',
+            search,
+            monthExpenses.map((item) => item.id),
+          ),
+          semanticRankIds(
+            'plan',
+            search,
+            monthPlans.map((item) => item.id),
+          ),
+          semanticRankIds(
+            'loan',
+            search,
+            monthLoans.map((item) => item.id),
+          ),
+        ])
+        if (cancelled) return
+        setSemanticExpenseIds(expenseIds)
+        setSemanticPlanIds(planIds)
+        setSemanticLoanIds(loanIds)
+      })()
+    }, 280)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [
+    search,
+    searchMode,
+    similarAvailable,
+    monthExpenses,
+    monthPlans,
+    monthLoans,
+  ])
+
   const filteredExpenses = useMemo(() => {
-    let list = expenses
-    if (monthKey) {
-      list = list.filter((item) => toMonthKey(item.date) === monthKey)
+    if (!search.trim()) return monthExpenses
+    if (searchMode === 'similar' && semanticExpenseIds) {
+      const map = new Map(monthExpenses.map((item) => [item.id, item]))
+      return semanticExpenseIds
+        .map((id) => map.get(id))
+        .filter((item): item is Expense => Boolean(item))
     }
-    if (search.trim()) {
-      list = list.filter((item) =>
-        matchesSearch(
-          `${item.category} ${item.description ?? ''} ${item.amount}`,
-          search,
-        ),
-      )
-    }
-    return list
-  }, [expenses, monthKey, search])
+    return monthExpenses.filter((item) =>
+      matchesSearch(
+        `${item.category} ${item.description ?? ''} ${item.amount}`,
+        search,
+      ),
+    )
+  }, [monthExpenses, search, searchMode, semanticExpenseIds])
 
   const filteredPlans = useMemo(() => {
-    let list = filterPlansByMonth(
-      plans.filter((plan) => plan.status === 'upcoming'),
-      monthKey,
-    )
-    if (search.trim()) {
-      list = list.filter((item) =>
-        matchesSearch(
-          `${item.category} ${item.description ?? ''} ${item.amount}`,
-          search,
-        ),
-      )
+    if (!search.trim()) return monthPlans
+    if (searchMode === 'similar' && semanticPlanIds) {
+      const map = new Map(monthPlans.map((item) => [item.id, item]))
+      return semanticPlanIds
+        .map((id) => map.get(id))
+        .filter((item): item is PlanExpense => Boolean(item))
     }
-    return list
-  }, [plans, monthKey, search])
+    return monthPlans.filter((item) =>
+      matchesSearch(
+        `${item.category} ${item.description ?? ''} ${item.amount}`,
+        search,
+      ),
+    )
+  }, [monthPlans, search, searchMode, semanticPlanIds])
 
   const filteredLoans = useMemo(() => {
-    let list = filterLoansByMonth(loans, monthKey)
-    if (search.trim()) {
-      list = list.filter((item) =>
-        matchesSearch(
-          `${item.person} ${item.description ?? ''} ${item.direction} ${item.amount}`,
-          search,
-        ),
-      )
+    if (!search.trim()) return monthLoans
+    if (searchMode === 'similar' && semanticLoanIds) {
+      const map = new Map(monthLoans.map((item) => [item.id, item]))
+      return semanticLoanIds
+        .map((id) => map.get(id))
+        .filter((item): item is Loan => Boolean(item))
     }
-    return list
-  }, [loans, monthKey, search])
+    return monthLoans.filter((item) =>
+      matchesSearch(
+        `${item.person} ${item.description ?? ''} ${item.direction} ${item.amount}`,
+        search,
+      ),
+    )
+  }, [monthLoans, search, searchMode, semanticLoanIds])
 
   const expenseTotal = useMemo(
     () => filteredExpenses.reduce((sum, item) => sum + Number(item.amount), 0),
@@ -300,8 +433,9 @@ export default function MoneyPage() {
   }
 
   const handleExpenseSubmit = async (values: ExpenseFormValues) => {
+    const text = `${values.category} ${values.description ?? ''} ${values.amount}`
     if (editingExpense) {
-      await updateExpense(editingExpense.id, {
+      const updated = await updateExpense(editingExpense.id, {
         amount: values.amount,
         category: values.category,
         description: values.description,
@@ -309,19 +443,21 @@ export default function MoneyPage() {
         receiptFile: values.receiptFile,
         clearReceipt: values.clearReceipt,
       })
+      void indexSearchDocument('expense', updated.id, text)
       await present({
         message: 'Expense updated',
         duration: 1500,
         color: 'success',
       })
     } else {
-      await addExpense({
+      const created = await addExpense({
         amount: values.amount,
         category: values.category,
         description: values.description,
         date: values.date,
         receiptFile: values.receiptFile,
       })
+      void indexSearchDocument('expense', created.id, text)
       await present({
         message: 'Expense saved',
         duration: 1500,
@@ -331,15 +467,18 @@ export default function MoneyPage() {
   }
 
   const handlePlanSubmit = async (values: PlanFormValues) => {
+    const text = `${values.category} ${values.description ?? ''} ${values.amount}`
     if (editingPlan) {
-      await updatePlan(editingPlan.id, values)
+      const updated = await updatePlan(editingPlan.id, values)
+      void indexSearchDocument('plan', updated.id, text)
       await present({
         message: 'Plan updated',
         duration: 1500,
         color: 'success',
       })
     } else {
-      await addPlan(values)
+      const created = await addPlan(values)
+      void indexSearchDocument('plan', created.id, text)
       await present({
         message: 'Plan saved',
         duration: 1500,
@@ -349,8 +488,9 @@ export default function MoneyPage() {
   }
 
   const handleLoanSubmit = async (values: LoanFormValues) => {
+    const text = `${values.person} ${values.description ?? ''} ${values.direction} ${values.amount}`
     if (editingLoan) {
-      await updateLoan(editingLoan.id, {
+      const updated = await updateLoan(editingLoan.id, {
         person: values.person,
         amount: values.amount,
         remaining: values.remaining ?? values.amount,
@@ -359,19 +499,27 @@ export default function MoneyPage() {
         due_date: values.due_date,
         description: values.description,
       })
+      void indexSearchDocument('loan', updated.id, text)
       await present({
         message: 'Loan updated',
         duration: 1500,
         color: 'success',
       })
     } else {
-      await addLoan(values)
+      const created = await addLoan(values)
+      void indexSearchDocument('loan', created.id, text)
       await present({
         message: 'Loan saved',
         duration: 1500,
         color: 'success',
       })
     }
+  }
+
+  const handleSearchModeChange = (mode: SearchMode) => {
+    if (mode === 'similar' && !similarAvailable) return
+    setSearchMode(mode)
+    localStorage.setItem(SEARCH_MODE_KEY, mode)
   }
 
   return (
@@ -461,6 +609,9 @@ export default function MoneyPage() {
               : 'Search category, note…'
           }
           onChange={setSearch}
+          mode={searchMode}
+          onModeChange={handleSearchModeChange}
+          similarAvailable={similarAvailable}
         />
 
         {segment === 'expenses' && (
@@ -482,6 +633,7 @@ export default function MoneyPage() {
               }}
               onDelete={async (id) => {
                 await deleteExpense(id)
+                void removeSearchDocument('expense', id)
                 await present({
                   message: 'Expense deleted',
                   duration: 1500,
@@ -510,6 +662,7 @@ export default function MoneyPage() {
               }}
               onDelete={async (id) => {
                 await deletePlan(id)
+                void removeSearchDocument('plan', id)
                 await present({
                   message: 'Plan deleted',
                   duration: 1500,
@@ -549,6 +702,7 @@ export default function MoneyPage() {
               }}
               onDelete={async (id) => {
                 await deleteLoan(id)
+                void removeSearchDocument('loan', id)
                 await present({
                   message: 'Loan deleted',
                   duration: 1500,

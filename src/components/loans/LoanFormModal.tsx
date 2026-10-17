@@ -16,8 +16,10 @@ import {
   useIonToast,
 } from '@ionic/react'
 import { useEffect, useState } from 'react'
+import { AiSuggestion } from '../common/AiSuggestion'
 import type { Loan, LoanDirection } from '../../core/types/loan'
 import { toDateKey } from '../../core/utils/date'
+import { useDescriptionSuggest } from '../../hooks/useDescriptionSuggest'
 
 export interface LoanFormValues {
   person: string
@@ -51,6 +53,10 @@ export function LoanFormModal({
   const [description, setDescription] = useState('')
   const [saving, setSaving] = useState(false)
   const [present] = useIonToast()
+  const descSuggest = useDescriptionSuggest(description, {
+    enabled: isOpen,
+    suggestOnMount: Boolean(loan?.description),
+  })
 
   useEffect(() => {
     if (!isOpen) return
@@ -194,6 +200,16 @@ export function LoanFormModal({
               onIonInput={(event) => setDescription(event.detail.value ?? '')}
             />
           </IonItem>
+          <AiSuggestion
+            label="Suggested note"
+            value={descSuggest.suggestion}
+            loading={descSuggest.loading}
+            onAccept={() => {
+              const next = descSuggest.accept()
+              if (next) setDescription(next)
+            }}
+            onDismiss={descSuggest.dismiss}
+          />
         </IonList>
 
         <IonItem lines="none" className="ion-margin-top">

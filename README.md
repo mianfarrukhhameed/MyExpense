@@ -65,6 +65,18 @@ On login, if this device has **older** profile (budget/currency) or expenses tha
 - **Overwrite cloud** — push this device’s conflicting rows
 - **Cancel** — neither push nor pull those rows (deferred; other sync continues)
 
+### On-device Writer / Rewriter / Embeddings (desktop Chrome)
+
+Progressive enhancement when the APIs are available (flags / origin trials + model download). Hidden or disabled otherwise.
+
+- **Writer (Dashboard):** **Generate financial review** — short personalized report from month budget, spend, burn pace, and top categories
+- **Rewriter (forms):** After you pause typing (or when a voice/image draft opens), suggests a cleaner description/note — **Use this** / **Dismiss** (Expense, Plan, Loan)
+- **Embeddings:**
+  - Category suggest on expense form (strict keywords first, then semantic match) — Accept / Dismiss
+  - Money search modes: **Contains** (default substring) or **Similar** (semantic). Vectors stored in IndexedDB `myexpense-ai`
+
+Spoken date parsing in rule-based voice/OCR also understands month names and ordinals (e.g. “10th October”, “on the 5th”).
+
 ## Supabase setup
 
 1. Create a project at [supabase.com](https://supabase.com)
