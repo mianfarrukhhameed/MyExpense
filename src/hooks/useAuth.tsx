@@ -53,6 +53,8 @@ interface AuthContextValue {
   user: User | null
   session: Session | null
   loading: boolean
+  /** True while resolving a sync conflict choice (app shell is already shown). */
+  resolvingConflict: boolean
   configured: boolean
   signInWithPassword: (email: string, password: string) => Promise<void>
   register: (email: string, password: string) => Promise<void>
@@ -63,19 +65,39 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 
 type AskConflict = (report: SyncConflictReport) => Promise<SyncConflictChoice>
 
+/** Agent / e2e: auto-pick Use cloud so automated browsers are not blocked. */
+function shouldAutoResolveConflicts(): boolean {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      if (localStorage.getItem('myexpense:e2e') === '1') return true
+    }
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('e2e') === '1') {
+        localStorage.setItem('myexpense:e2e', '1')
+        return true
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return false
+}
+
 /**
  * Bring this device in line with the cloud for the signed-in user.
+ * `onAwaitingUserInput` releases the full-screen spinner before conflict UI.
  */
 async function bootstrapAuthenticatedUser(
   user: User,
   askConflict: AskConflict,
+  onAwaitingUserInput?: () => void,
 ): Promise<void> {
   const { profile, migratedGuest, switchedUser } = await bindLocalDataToUser(
     user.id,
   )
 
   if (switchedUser) {
-    // Reinstall / account switch: cloud is source of truth — never push empty defaults
     await hydrateFromRemote()
     await ensureRemoteProfile(user.id)
     await syncNow()
@@ -114,14 +136,14 @@ async function bootstrapAuthenticatedUser(
     return
   }
 
-  // Returning same user: detect older-local conflicts before flush/hydrate
   const conflicts = await detectSyncConflicts(user.id)
   if (conflicts) {
+    // Show app shell + conflict modal; do not keep a full-screen spinner
+    onAwaitingUserInput?.()
     const choice = await askConflict(conflicts)
     await applySyncConflictChoice(user.id, conflicts, choice)
 
     if (choice === 'cancel') {
-      // Neither push nor pull conflicting rows; keep local UI as-is
       await startSyncListeners()
       return
     }
@@ -135,7 +157,6 @@ async function bootstrapAuthenticatedUser(
       return
     }
 
-    // use_cloud — conflicts already applied from remote; pull the rest
     await hydrateFromRemote()
     await ensureRemoteProfile(user.id)
     await syncNow()
@@ -154,18 +175,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+  const [resolvingConflict, setResolvingConflict] = useState(false)
   const [conflictReport, setConflictReport] =
     useState<SyncConflictReport | null>(null)
   const configured = isSupabaseConfigured()
   const bootstrappedUserId = useRef<string | null>(null)
-  const conflictResolverRef = useRef<((choice: SyncConflictChoice) => void) | null>(
-    null,
-  )
+  const bootstrapInFlight = useRef<Promise<void> | null>(null)
+  const signInOwnsBootstrap = useRef(false)
+  const conflictResolverRef = useRef<
+    ((choice: SyncConflictChoice) => void) | null
+  >(null)
+  const releaseUiForConflictRef = useRef<(() => void) | null>(null)
 
   const askConflict = useCallback((report: SyncConflictReport) => {
+    if (shouldAutoResolveConflicts()) {
+      return Promise.resolve('use_cloud' as SyncConflictChoice)
+    }
+
     return new Promise<SyncConflictChoice>((resolve) => {
       conflictResolverRef.current = resolve
       setConflictReport(report)
+      setResolvingConflict(true)
+      releaseUiForConflictRef.current?.()
     })
   }, [])
 
@@ -183,8 +214,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await startSyncListeners()
         return
       }
-      bootstrappedUserId.current = nextUser.id
-      await bootstrapAuthenticatedUser(nextUser, askConflict)
+
+      if (bootstrapInFlight.current) {
+        await bootstrapInFlight.current
+        return
+      }
+
+      const job = (async () => {
+        try {
+          await bootstrapAuthenticatedUser(
+            nextUser,
+            askConflict,
+            () => releaseUiForConflictRef.current?.(),
+          )
+          bootstrappedUserId.current = nextUser.id
+        } finally {
+          setResolvingConflict(false)
+          bootstrapInFlight.current = null
+        }
+      })()
+
+      bootstrapInFlight.current = job
+      await job
     },
     [askConflict],
   )
@@ -197,6 +248,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const current = await getSession()
         if (cancelled) return
         if (current?.user) {
+          releaseUiForConflictRef.current = () => {
+            if (cancelled) return
+            setSession(current)
+            setUser(current.user)
+            setLoading(false)
+          }
           await runBootstrap(current.user)
           if (cancelled) return
           setSession(current)
@@ -211,6 +268,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(null)
         }
       } finally {
+        releaseUiForConflictRef.current = null
         if (!cancelled) setLoading(false)
       }
     }
@@ -220,19 +278,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const unsubscribe = onAuthStateChange((next) => {
       void (async () => {
         if (next?.user) {
+          // Password sign-in / register owns bootstrap — avoid spinner + race
+          if (signInOwnsBootstrap.current) {
+            setSession(next)
+            setUser(next.user)
+            return
+          }
+
           setLoading(true)
           try {
+            releaseUiForConflictRef.current = () => {
+              if (cancelled) return
+              setSession(next)
+              setUser(next.user)
+              setLoading(false)
+            }
             await runBootstrap(next.user)
             if (cancelled) return
             setSession(next)
             setUser(next.user)
           } finally {
+            releaseUiForConflictRef.current = null
             if (!cancelled) setLoading(false)
           }
         } else {
           bootstrappedUserId.current = null
           setSession(null)
           setUser(null)
+          setResolvingConflict(false)
+          setConflictReport(null)
         }
       })()
     })
@@ -246,42 +320,64 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signInWithPassword = useCallback(
     async (email: string, password: string) => {
       setLoading(true)
+      signInOwnsBootstrap.current = true
       try {
         const data = await signIn(email, password)
         if (data.user) {
+          releaseUiForConflictRef.current = () => {
+            setSession(data.session)
+            setUser(data.user)
+            setLoading(false)
+          }
           await runBootstrap(data.user)
           setSession(data.session)
           setUser(data.user)
         }
       } finally {
+        releaseUiForConflictRef.current = null
+        signInOwnsBootstrap.current = false
         setLoading(false)
       }
     },
     [runBootstrap],
   )
 
-  const register = useCallback(async (email: string, password: string) => {
-    setLoading(true)
-    try {
-      const data = await signUp(email, password)
-      if (data.session?.user) {
-        await runBootstrap(data.session.user)
-        setSession(data.session)
-        setUser(data.session.user)
+  const register = useCallback(
+    async (email: string, password: string) => {
+      setLoading(true)
+      signInOwnsBootstrap.current = true
+      try {
+        const data = await signUp(email, password)
+        if (data.session?.user) {
+          releaseUiForConflictRef.current = () => {
+            setSession(data.session)
+            setUser(data.session!.user)
+            setLoading(false)
+          }
+          await runBootstrap(data.session.user)
+          setSession(data.session)
+          setUser(data.session.user)
+        }
+      } finally {
+        releaseUiForConflictRef.current = null
+        signInOwnsBootstrap.current = false
+        setLoading(false)
       }
-    } finally {
-      setLoading(false)
-    }
-  }, [runBootstrap])
+    },
+    [runBootstrap],
+  )
 
   const logOut = useCallback(async () => {
     setLoading(true)
     try {
       await signOut()
       bootstrappedUserId.current = null
+      bootstrapInFlight.current = null
       await clearLocalWorkspace()
       setSession(null)
       setUser(null)
+      setConflictReport(null)
+      setResolvingConflict(false)
     } finally {
       setLoading(false)
     }
@@ -292,12 +388,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       session,
       loading,
+      resolvingConflict,
       configured,
       signInWithPassword,
       register,
       logOut,
     }),
-    [user, session, loading, configured, signInWithPassword, register, logOut],
+    [
+      user,
+      session,
+      loading,
+      resolvingConflict,
+      configured,
+      signInWithPassword,
+      register,
+      logOut,
+    ],
   )
 
   return (

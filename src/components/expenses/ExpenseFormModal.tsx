@@ -231,6 +231,7 @@ export function ExpenseFormModal({
         {draftNote && (
           <IonNote color="medium" className="draft-note">
             {draftNote}
+            {draft?.method ? ` · ${draft.method}` : ''}
             {draft?.rawText ? ` · “${draft.rawText.slice(0, 80)}${draft.rawText.length > 80 ? '…' : ''}”` : ''}
           </IonNote>
         )}

@@ -1,8 +1,10 @@
+import { useIonToast } from '@ionic/react'
 import { useEffect, useRef, useState } from 'react'
 import {
   suggestCategory,
   type CategorySuggestion,
 } from '../services/ai/category-suggest'
+import { AiMethod, presentMethodToast } from '../services/ai/method-labels'
 
 const DEBOUNCE_MS = 1000
 
@@ -19,6 +21,7 @@ export function useCategorySuggest(
   const suggestOnMount = options?.suggestOnMount ?? false
   const [suggestion, setSuggestion] = useState<CategorySuggestion | null>(null)
   const [loading, setLoading] = useState(false)
+  const [present] = useIonToast()
   const lastFor = useRef('')
   const seq = useRef(0)
   const mountedOnce = useRef(false)
@@ -47,6 +50,10 @@ export function useCategorySuggest(
         lastFor.current = text
         if (result && result.category !== currentCategory) {
           setSuggestion(result)
+          presentMethodToast(
+            present,
+            result.source === 'embedding' ? AiMethod.embeddings : AiMethod.keywords,
+          )
         } else {
           setSuggestion(null)
         }
@@ -54,7 +61,7 @@ export function useCategorySuggest(
     }, delay)
 
     return () => window.clearTimeout(timer)
-  }, [description, currentCategory, enabled, suggestOnMount])
+  }, [description, currentCategory, enabled, suggestOnMount, present])
 
   const accept = (): string | null => {
     if (!suggestion) return null

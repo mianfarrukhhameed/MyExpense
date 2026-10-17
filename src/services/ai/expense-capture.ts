@@ -68,7 +68,8 @@ export async function stopVoiceHold(
   if (mode === 'prompt-audio') {
     onProgress?.('Understanding…')
     const audio = await stopHoldRecording()
-    return parseExpenseWithPromptAudio(audio)
+    const draft = await parseExpenseWithPromptAudio(audio)
+    return { ...draft, method: 'promptAudio' }
   }
 
   onProgress?.('Processing…')
@@ -78,12 +79,16 @@ export async function stopVoiceHold(
 
   if (caps.promptText) {
     try {
-      return await parseExpenseWithPromptText(english)
+      const draft = await parseExpenseWithPromptText(english)
+      return { ...draft, method: 'webSpeech · promptApi' }
     } catch {
       /* fall through */
     }
   }
-  return localParseExpense(english, 'speech')
+  return {
+    ...localParseExpense(english, 'speech'),
+    method: 'webSpeech',
+  }
 }
 
 /** @deprecated Prefer startVoiceHold / stopVoiceHold */
@@ -92,7 +97,6 @@ export async function captureExpenseFromVoice(
 ): Promise<ExpenseDraft> {
   onProgress?.('Listening… hold the mic')
   const mode = await startVoiceHold()
-  // Fallback if someone still calls the old API: record ~4s then stop
   await new Promise((resolve) => window.setTimeout(resolve, 4000))
   return stopVoiceHold(mode, onProgress)
 }
@@ -107,7 +111,7 @@ export async function captureExpenseFromReceipt(
     onProgress?.('Reading receipt (AI)…')
     try {
       const draft = await parseExpenseWithPromptImage(file)
-      return { ...draft, receiptFile: file }
+      return { ...draft, receiptFile: file, method: 'promptImage' }
     } catch {
       /* fall through to OCR */
     }
@@ -120,7 +124,12 @@ export async function captureExpenseFromReceipt(
   if (caps.promptText) {
     try {
       const draft = await parseExpenseWithPromptText(english)
-      return { ...draft, receiptFile: file, rawText: text }
+      return {
+        ...draft,
+        receiptFile: file,
+        rawText: text,
+        method: 'tesseractOcr · promptApi',
+      }
     } catch {
       /* fall through */
     }
@@ -130,5 +139,6 @@ export async function captureExpenseFromReceipt(
     ...localParseExpense(english, 'ocr'),
     receiptFile: file,
     rawText: text,
+    method: 'tesseractOcr',
   }
 }

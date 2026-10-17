@@ -1,5 +1,7 @@
+import { useIonToast } from '@ionic/react'
 import { useEffect, useRef, useState } from 'react'
 import { getRewriterApi, isAiSurfaceReady } from '../services/ai/capability'
+import { AiMethod, presentMethodToast } from '../services/ai/method-labels'
 import { rewriteExpenseDescription } from '../services/ai/rewriter'
 
 const DEBOUNCE_MS = 1000
@@ -40,6 +42,7 @@ export function useDescriptionSuggest(
   const [suggestion, setSuggestion] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [available, setAvailable] = useState(false)
+  const [present] = useIonToast()
   const lastSuggestedFor = useRef<string>('')
   const seq = useRef(0)
   const mountedOnce = useRef(false)
@@ -82,6 +85,7 @@ export function useDescriptionSuggest(
         if (result) {
           lastSuggestedFor.current = text
           setSuggestion(result)
+          presentMethodToast(present, AiMethod.rewriter)
         } else {
           setSuggestion(null)
         }
@@ -91,7 +95,7 @@ export function useDescriptionSuggest(
     return () => {
       window.clearTimeout(timer)
     }
-  }, [description, enabled, available, category, suggestOnMount])
+  }, [description, enabled, available, category, suggestOnMount, present])
 
   const accept = (): string | null => {
     if (!suggestion) return null

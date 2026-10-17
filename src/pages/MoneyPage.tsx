@@ -70,6 +70,10 @@ import {
   type VoiceHoldMode,
 } from '../services/ai/expense-capture'
 import {
+  AiMethod,
+  presentMethodToast,
+} from '../services/ai/method-labels'
+import {
   backfillSearchIndex,
   indexSearchDocument,
   isSemanticSearchAvailable,
@@ -133,6 +137,7 @@ export default function MoneyPage() {
   const [semanticLoanIds, setSemanticLoanIds] = useState<string[] | null>(null)
   const [present] = useIonToast()
   const scanInputRef = useRef<HTMLInputElement>(null)
+  const lastSearchToastKey = useRef('')
 
   const [expenseFormOpen, setExpenseFormOpen] = useState(false)
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
@@ -252,6 +257,40 @@ export default function MoneyPage() {
     monthExpenses,
     monthPlans,
     monthLoans,
+  ])
+
+  useEffect(() => {
+    const q = search.trim()
+    if (!q) {
+      lastSearchToastKey.current = ''
+      return
+    }
+    const method =
+      searchMode === 'similar' && similarAvailable
+        ? AiMethod.embeddingsSearch
+        : AiMethod.substringSearch
+    const key = `${method}:${q}`
+    if (lastSearchToastKey.current === key) return
+    // Wait until similar mode has ranked (or contains mode is ready)
+    if (searchMode === 'similar' && similarAvailable) {
+      if (
+        semanticExpenseIds == null &&
+        semanticPlanIds == null &&
+        semanticLoanIds == null
+      ) {
+        return
+      }
+    }
+    lastSearchToastKey.current = key
+    presentMethodToast(present, method)
+  }, [
+    search,
+    searchMode,
+    similarAvailable,
+    semanticExpenseIds,
+    semanticPlanIds,
+    semanticLoanIds,
+    present,
   ])
 
   const filteredExpenses = useMemo(() => {
@@ -387,6 +426,7 @@ export default function MoneyPage() {
       const draft = await stopVoiceHold(mode, (message) => {
         void present({ message, duration: 1500, color: 'medium' })
       })
+      presentMethodToast(present, draft.method ?? AiMethod.webSpeech)
       setEditingExpense(null)
       setExpenseDraft(draft)
       setExpenseFormOpen(true)
@@ -417,6 +457,7 @@ export default function MoneyPage() {
       const draft = await captureExpenseFromReceipt(file, (message) => {
         void present({ message, duration: 1500, color: 'medium' })
       })
+      presentMethodToast(present, draft.method ?? AiMethod.tesseractOcr)
       setEditingExpense(null)
       setExpenseDraft(draft)
       setExpenseFormOpen(true)

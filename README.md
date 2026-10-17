@@ -59,11 +59,18 @@ Offline-first personal expense tracker PWA (Ionic React + IndexedDB + Supabase).
 
 ### Multi-device sync conflicts
 
-On login, if this device has **older** profile (budget/currency) or expenses that **differ** from cloud, a dialog offers:
+On login, if this device has **older** profile (budget/currency) or expenses that **differ** from cloud, a modal offers:
 
 - **Use cloud** — pull conflicting rows from Supabase
 - **Overwrite cloud** — push this device’s conflicting rows
 - **Cancel** — neither push nor pull those rows (deferred; other sync continues)
+
+The app shell is shown while the modal is open (not a full-screen spinner), so browser agents can click:
+
+- `data-testid="sync-conflict-dialog"`
+- `data-testid="conflict-use-cloud"` / `conflict-overwrite` / `conflict-cancel`
+
+**E2E / agent shortcut:** open with `?e2e=1` or set `localStorage.myexpense:e2e=1` to auto-choose **Use cloud** and skip the modal.
 
 ### On-device Writer / Rewriter / Embeddings (desktop Chrome)
 

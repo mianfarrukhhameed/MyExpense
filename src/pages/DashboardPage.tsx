@@ -28,6 +28,7 @@ import {
   getCaptureCapabilities,
   type CaptureCapabilities,
 } from '../services/ai/capability'
+import { AiMethod, presentMethodToast } from '../services/ai/method-labels'
 import { writeFinancialReview } from '../services/ai/writer'
 
 export default function DashboardPage() {
@@ -100,6 +101,7 @@ export default function DashboardPage() {
         topCategories,
       })
       setReview(text)
+      presentMethodToast(present, AiMethod.writer)
     } catch (err) {
       await present({
         message:
