@@ -35,7 +35,7 @@ Offline-first personal expense tracker PWA (Ionic React + IndexedDB + Supabase).
 - `InstallPrompt`: Android `beforeinstallprompt` sheet; iOS Share → Add to Home Screen tip
 - FCM: Settings **Daily expense reminder** stores `profiles.fcm_token`
 - Migration [`002_fcm_token.sql`](supabase/migrations/002_fcm_token.sql)
-- Cloudflare Worker cron stub: [`workers/daily-reminder/`](workers/daily-reminder/)
+- Cloudflare Worker cron (FCM HTTP v1): [`workers/daily-reminder/`](workers/daily-reminder/)
 
 ### Money hub (Plans, Loans, month filters)
 
@@ -117,6 +117,7 @@ Spoken date parsing in rule-based voice/OCR also understands month names and ord
 2. Queue an expense offline → go online → sync
 3. Android Chrome: install CTA; iOS Safari (not standalone): Share instructions
 4. Enable reminder with Firebase env → `fcm_token` set
+5. Deploy `workers/daily-reminder` with FCM service-account secrets (real HTTP v1 send); or Firebase Console test message
 
 ## Scripts
 

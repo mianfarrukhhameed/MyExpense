@@ -473,7 +473,8 @@ export default function SettingsPage() {
             ) : (
               <IonNote color="medium">
                 Token is stored on your profile and can be targeted by the
-                Cloudflare Worker stub in `workers/daily-reminder/`.
+                Cloudflare Worker in `workers/daily-reminder/` sends FCM HTTP
+                v1 on a daily cron (after you deploy secrets).
               </IonNote>
             )}
           </IonCardContent>
