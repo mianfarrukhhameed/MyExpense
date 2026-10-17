@@ -13,6 +13,7 @@ import {
   DEFAULT_CURRENCY,
   DEFAULT_MONTHLY_BUDGET,
 } from '../core/config/app.config'
+import { SyncConflictDialog } from '../components/sync/SyncConflictDialog'
 import {
   bindLocalDataToUser,
   clearLocalWorkspace,
@@ -31,6 +32,12 @@ import {
 } from '../lib/supabase/auth'
 import { isSupabaseConfigured } from '../lib/supabase/client'
 import { hydrateFromRemote } from '../services/offline/hydration'
+import {
+  applySyncConflictChoice,
+  detectSyncConflicts,
+  type SyncConflictChoice,
+  type SyncConflictReport,
+} from '../services/sync/conflict'
 import {
   ensureRemoteProfile,
   flushQueue,
@@ -54,12 +61,15 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
+type AskConflict = (report: SyncConflictReport) => Promise<SyncConflictChoice>
+
 /**
  * Bring this device in line with the cloud for the signed-in user.
- * Flush any pending local writes first, then replace local workspace from remote
- * so iOS / desktop always converge on the same account data.
  */
-async function bootstrapAuthenticatedUser(user: User): Promise<void> {
+async function bootstrapAuthenticatedUser(
+  user: User,
+  askConflict: AskConflict,
+): Promise<void> {
   const { profile, migratedGuest, switchedUser } = await bindLocalDataToUser(
     user.id,
   )
@@ -68,13 +78,17 @@ async function bootstrapAuthenticatedUser(user: User): Promise<void> {
     // Reinstall / account switch: cloud is source of truth — never push empty defaults
     await hydrateFromRemote()
     await ensureRemoteProfile(user.id)
-  } else if (migratedGuest) {
+    await syncNow()
+    await startSyncListeners()
+    return
+  }
+
+  if (migratedGuest) {
     await ensureRemoteProfile(user.id)
     const expenses = await listExpenses()
     const hasCustomProfile =
       Number(profile.monthly_budget) !== DEFAULT_MONTHLY_BUDGET ||
       profile.currency !== DEFAULT_CURRENCY
-    // Only push profile when guest actually set budget/currency
     if (hasCustomProfile) {
       await enqueueSyncItem({
         entity: 'profile',
@@ -94,15 +108,44 @@ async function bootstrapAuthenticatedUser(user: User): Promise<void> {
     if (loans.length > 0) await pushAllLocalLoans(user.id)
     if (monthBudgets.length > 0) await pushAllLocalMonthBudgets(user.id)
     await flushQueue()
-    // Merge with cloud (preserves remote budget if we did not push defaults)
     await hydrateFromRemote()
-  } else {
-    // Returning same user on this device: push pending, then take cloud snapshot
-    await flushQueue()
-    await hydrateFromRemote()
-    await ensureRemoteProfile(user.id)
+    await syncNow()
+    await startSyncListeners()
+    return
   }
 
+  // Returning same user: detect older-local conflicts before flush/hydrate
+  const conflicts = await detectSyncConflicts(user.id)
+  if (conflicts) {
+    const choice = await askConflict(conflicts)
+    await applySyncConflictChoice(user.id, conflicts, choice)
+
+    if (choice === 'cancel') {
+      // Neither push nor pull conflicting rows; keep local UI as-is
+      await startSyncListeners()
+      return
+    }
+
+    if (choice === 'push_local') {
+      await flushQueue()
+      await hydrateFromRemote()
+      await ensureRemoteProfile(user.id)
+      await syncNow()
+      await startSyncListeners()
+      return
+    }
+
+    // use_cloud — conflicts already applied from remote; pull the rest
+    await hydrateFromRemote()
+    await ensureRemoteProfile(user.id)
+    await syncNow()
+    await startSyncListeners()
+    return
+  }
+
+  await flushQueue()
+  await hydrateFromRemote()
+  await ensureRemoteProfile(user.id)
   await syncNow()
   await startSyncListeners()
 }
@@ -111,18 +154,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+  const [conflictReport, setConflictReport] =
+    useState<SyncConflictReport | null>(null)
   const configured = isSupabaseConfigured()
   const bootstrappedUserId = useRef<string | null>(null)
+  const conflictResolverRef = useRef<((choice: SyncConflictChoice) => void) | null>(
+    null,
+  )
 
-  const runBootstrap = useCallback(async (nextUser: User) => {
-    if (bootstrappedUserId.current === nextUser.id) {
-      await syncNow()
-      await startSyncListeners()
-      return
-    }
-    bootstrappedUserId.current = nextUser.id
-    await bootstrapAuthenticatedUser(nextUser)
+  const askConflict = useCallback((report: SyncConflictReport) => {
+    return new Promise<SyncConflictChoice>((resolve) => {
+      conflictResolverRef.current = resolve
+      setConflictReport(report)
+    })
   }, [])
+
+  const handleConflictChoice = useCallback((choice: SyncConflictChoice) => {
+    const resolve = conflictResolverRef.current
+    conflictResolverRef.current = null
+    setConflictReport(null)
+    resolve?.(choice)
+  }, [])
+
+  const runBootstrap = useCallback(
+    async (nextUser: User) => {
+      if (bootstrappedUserId.current === nextUser.id) {
+        await syncNow()
+        await startSyncListeners()
+        return
+      }
+      bootstrappedUserId.current = nextUser.id
+      await bootstrapAuthenticatedUser(nextUser, askConflict)
+    },
+    [askConflict],
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -235,7 +300,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [user, session, loading, configured, signInWithPassword, register, logOut],
   )
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+      <SyncConflictDialog
+        report={conflictReport}
+        onChoice={handleConflictChoice}
+      />
+    </AuthContext.Provider>
+  )
 }
 
 export function useAuth(): AuthContextValue {

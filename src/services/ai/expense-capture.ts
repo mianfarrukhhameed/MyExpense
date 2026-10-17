@@ -11,7 +11,12 @@ import {
   parseExpenseWithPromptText,
 } from './prompt-parse'
 import { localParseExpense } from './local-parse'
-import { listenForTranscript, recordAudioBlob } from './speech'
+import {
+  startHoldRecording,
+  startHoldSpeech,
+  stopHoldRecording,
+  stopHoldSpeech,
+} from './speech'
 import { maybeTranslateToEnglish } from './translate'
 
 export type CaptureProgress = (message: string) => void
@@ -26,22 +31,20 @@ export async function loadCaptureCapabilities(
   return cachedCaps
 }
 
-export async function captureExpenseFromVoice(
-  onProgress?: CaptureProgress,
-): Promise<ExpenseDraft> {
+export type VoiceHoldMode = 'prompt-audio' | 'speech'
+
+/** Begin hold-to-talk; call stopVoiceHold when the button is released. */
+export async function startVoiceHold(): Promise<VoiceHoldMode> {
   const caps = await loadCaptureCapabilities(true)
 
-  // Desktop: Prompt API only — never fall back to Web Speech
   if (caps.desktopPromptPreferred) {
     if (!caps.promptAudio) {
       throw new Error(
         'AI voice needs desktop Chrome/Edge with Prompt API (audio). Check chrome://on-device-internals — model may need download + GPU.',
       )
     }
-    onProgress?.('Listening (AI)…')
-    const audio = await recordAudioBlob(6500)
-    onProgress?.('Understanding… first AI use may download the model')
-    return parseExpenseWithPromptAudio(audio)
+    await startHoldRecording()
+    return 'prompt-audio'
   }
 
   if (!canCaptureVoice(caps)) {
@@ -49,26 +52,49 @@ export async function captureExpenseFromVoice(
   }
 
   if (caps.promptAudio) {
-    onProgress?.('Listening (AI)…')
-    const audio = await recordAudioBlob(6500)
+    await startHoldRecording()
+    return 'prompt-audio'
+  }
+
+  startHoldSpeech('en-US')
+  return 'speech'
+}
+
+/** Finish hold-to-talk and parse into an expense draft. */
+export async function stopVoiceHold(
+  mode: VoiceHoldMode,
+  onProgress?: CaptureProgress,
+): Promise<ExpenseDraft> {
+  if (mode === 'prompt-audio') {
     onProgress?.('Understanding…')
+    const audio = await stopHoldRecording()
     return parseExpenseWithPromptAudio(audio)
   }
 
-  onProgress?.('Listening…')
-  const transcript = await listenForTranscript({ timeoutMs: 12000 })
   onProgress?.('Processing…')
+  const transcript = await stopHoldSpeech()
   const english = await maybeTranslateToEnglish(transcript)
+  const caps = await loadCaptureCapabilities()
 
   if (caps.promptText) {
     try {
       return await parseExpenseWithPromptText(english)
     } catch {
-      /* fall through to rules */
+      /* fall through */
     }
   }
-
   return localParseExpense(english, 'speech')
+}
+
+/** @deprecated Prefer startVoiceHold / stopVoiceHold */
+export async function captureExpenseFromVoice(
+  onProgress?: CaptureProgress,
+): Promise<ExpenseDraft> {
+  onProgress?.('Listening… hold the mic')
+  const mode = await startVoiceHold()
+  // Fallback if someone still calls the old API: record ~4s then stop
+  await new Promise((resolve) => window.setTimeout(resolve, 4000))
+  return stopVoiceHold(mode, onProgress)
 }
 
 export async function captureExpenseFromReceipt(

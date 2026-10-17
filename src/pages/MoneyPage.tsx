@@ -13,7 +13,13 @@ import {
   cameraOutline,
   micOutline,
 } from 'ionicons/icons'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import { ListTotalBar } from '../components/common/ListTotalBar'
 import { MonthFilterBar } from '../components/common/MonthFilterBar'
 import { PageScaffold } from '../components/common/PageScaffold'
@@ -50,9 +56,15 @@ import {
   type CaptureCapabilities,
 } from '../services/ai/capability'
 import {
+  cancelHoldRecording,
+  cancelHoldSpeech,
+} from '../services/ai/speech'
+import {
   captureExpenseFromReceipt,
-  captureExpenseFromVoice,
   loadCaptureCapabilities,
+  startVoiceHold,
+  stopVoiceHold,
+  type VoiceHoldMode,
 } from '../services/ai/expense-capture'
 
 type MoneySegment = 'expenses' | 'plans' | 'loans'
@@ -98,6 +110,9 @@ export default function MoneyPage() {
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
   const [expenseDraft, setExpenseDraft] = useState<ExpenseDraft | null>(null)
   const [capturing, setCapturing] = useState(false)
+  const [holdingVoice, setHoldingVoice] = useState(false)
+  const voiceModeRef = useRef<VoiceHoldMode | null>(null)
+  const voicePointerRef = useRef<number | null>(null)
   const [caps, setCaps] = useState<CaptureCapabilities | null>(null)
   const [planFormOpen, setPlanFormOpen] = useState(false)
   const [editingPlan, setEditingPlan] = useState<PlanExpense | null>(null)
@@ -184,8 +199,10 @@ export default function MoneyPage() {
     }
   }
 
-  const handleVoiceCapture = async () => {
-    if (capturing) return
+  const handleVoicePointerDown = async (
+    event: ReactPointerEvent<HTMLElement>,
+  ) => {
+    if (capturing || holdingVoice) return
     if (caps && !canCaptureVoice(caps)) {
       await present({
         message: 'Voice entry is not supported on this device',
@@ -195,15 +212,54 @@ export default function MoneyPage() {
       return
     }
 
+    event.preventDefault()
+    voicePointerRef.current = event.pointerId
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId)
+    } catch {
+      /* ignore */
+    }
+
+    setHoldingVoice(true)
+    try {
+      const mode = await startVoiceHold()
+      voiceModeRef.current = mode
+      await present({
+        message: 'Listening… release to save',
+        duration: 1500,
+        color: 'medium',
+      })
+    } catch (err) {
+      setHoldingVoice(false)
+      voiceModeRef.current = null
+      await present({
+        message: err instanceof Error ? err.message : 'Could not start voice',
+        duration: 3000,
+        color: 'danger',
+      })
+    }
+  }
+
+  const handleVoicePointerUp = async () => {
+    if (!holdingVoice || !voiceModeRef.current) {
+      setHoldingVoice(false)
+      return
+    }
+
+    const mode = voiceModeRef.current
+    voiceModeRef.current = null
+    setHoldingVoice(false)
     setCapturing(true)
     try {
-      const draft = await captureExpenseFromVoice((message) => {
-        void present({ message, duration: 1200, color: 'medium' })
+      const draft = await stopVoiceHold(mode, (message) => {
+        void present({ message, duration: 1500, color: 'medium' })
       })
       setEditingExpense(null)
       setExpenseDraft(draft)
       setExpenseFormOpen(true)
     } catch (err) {
+      await cancelHoldRecording()
+      await cancelHoldSpeech()
       await present({
         message: err instanceof Error ? err.message : 'Voice capture failed',
         duration: 3000,
@@ -212,6 +268,13 @@ export default function MoneyPage() {
     } finally {
       setCapturing(false)
     }
+  }
+
+  const handleVoicePointerCancel = async () => {
+    voiceModeRef.current = null
+    setHoldingVoice(false)
+    await cancelHoldRecording()
+    await cancelHoldSpeech()
   }
 
   const handleReceiptFile = async (file: File | null) => {
@@ -331,9 +394,13 @@ export default function MoneyPage() {
                 </IonFabButton>
                 <IonFabButton
                   data-testid="fab-voice-expense"
-                  color={voiceEnabled ? 'primary' : 'medium'}
-                  onClick={() => void handleVoiceCapture()}
-                  disabled={capturing}
+                  color={holdingVoice ? 'danger' : voiceEnabled ? 'primary' : 'medium'}
+                  disabled={capturing && !holdingVoice}
+                  onPointerDown={(event) => void handleVoicePointerDown(event)}
+                  onPointerUp={() => void handleVoicePointerUp()}
+                  onPointerCancel={() => void handleVoicePointerCancel()}
+                  style={{ touchAction: 'none' }}
+                  title="Hold to talk"
                 >
                   <IonIcon icon={micOutline} />
                 </IonFabButton>

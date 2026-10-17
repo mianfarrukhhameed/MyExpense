@@ -18,6 +18,18 @@ type SpeechRecognitionResultEventLike = {
   }>
 }
 
+type ActiveRecording = {
+  recorder: MediaRecorder
+  stream: MediaStream
+  chunks: BlobPart[]
+  mimeType: string
+  startedAt: number
+}
+
+let activeRecording: ActiveRecording | null = null
+let activeRecognition: SpeechRecognitionLike | null = null
+let recognitionTranscript = ''
+
 function createRecognition(): SpeechRecognitionLike {
   const w = window as unknown as {
     SpeechRecognition?: new () => SpeechRecognitionLike
@@ -28,7 +40,7 @@ function createRecognition(): SpeechRecognitionLike {
   return new Ctor()
 }
 
-/** Listen once and resolve with the final transcript. */
+/** Listen once and resolve with the final transcript (legacy timeout path). */
 export function listenForTranscript(options?: {
   lang?: string
   timeoutMs?: number
@@ -93,8 +105,9 @@ export function listenForTranscript(options?: {
   })
 }
 
-/** Record a short audio clip for Prompt API multimodal input. */
-export async function recordAudioBlob(durationMs = 6000): Promise<Blob> {
+/** Start hold-to-talk MediaRecorder (Prompt API path). */
+export async function startHoldRecording(): Promise<void> {
+  if (activeRecording) return
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error('Microphone is not available')
   }
@@ -106,43 +119,153 @@ export async function recordAudioBlob(durationMs = 6000): Promise<Blob> {
       ? 'audio/webm'
       : 'audio/mp4'
 
-  return new Promise((resolve, reject) => {
-    const chunks: BlobPart[] = []
-    const recorder = new MediaRecorder(stream, { mimeType })
-    const timer = window.setTimeout(() => {
+  const chunks: BlobPart[] = []
+  const recorder = new MediaRecorder(stream, { mimeType })
+  recorder.ondataavailable = (event) => {
+    if (event.data.size > 0) chunks.push(event.data)
+  }
+
+  activeRecording = {
+    recorder,
+    stream,
+    chunks,
+    mimeType,
+    startedAt: Date.now(),
+  }
+  recorder.start(250)
+}
+
+/** Stop hold-to-talk recording and return the audio blob. */
+export async function stopHoldRecording(): Promise<Blob> {
+  const current = activeRecording
+  if (!current) throw new Error('Not recording')
+
+  const { recorder, stream, chunks, mimeType, startedAt } = current
+  activeRecording = null
+
+  if (Date.now() - startedAt < 300) {
+    try {
       if (recorder.state === 'recording') recorder.stop()
-    }, durationMs)
-
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) chunks.push(event.data)
+    } catch {
+      /* ignore */
     }
+    stream.getTracks().forEach((track) => track.stop())
+    throw new Error('Hold the mic button while speaking')
+  }
 
+  const blob = await new Promise<Blob>((resolve, reject) => {
     recorder.onerror = () => {
-      window.clearTimeout(timer)
       stream.getTracks().forEach((track) => track.stop())
       reject(new Error('Audio recording failed'))
     }
-
     recorder.onstop = () => {
-      window.clearTimeout(timer)
       stream.getTracks().forEach((track) => track.stop())
-      const blob = new Blob(chunks, { type: mimeType.split(';')[0] })
-      if (blob.size === 0) {
+      const result = new Blob(chunks, { type: mimeType.split(';')[0] })
+      if (result.size === 0) {
         reject(new Error('No audio captured — try again'))
         return
       }
-      resolve(blob)
+      resolve(result)
     }
-
     try {
-      // Timeslice so dataavailable fires reliably before stop
-      recorder.start(250)
+      if (recorder.state === 'recording') recorder.stop()
+      else {
+        stream.getTracks().forEach((track) => track.stop())
+        reject(new Error('Recording already stopped'))
+      }
     } catch (err) {
-      window.clearTimeout(timer)
       stream.getTracks().forEach((track) => track.stop())
-      reject(err instanceof Error ? err : new Error('Could not record audio'))
+      reject(err instanceof Error ? err : new Error('Could not stop recording'))
     }
   })
+
+  return blob
+}
+
+export async function cancelHoldRecording(): Promise<void> {
+  const current = activeRecording
+  if (!current) return
+  activeRecording = null
+  try {
+    if (current.recorder.state === 'recording') current.recorder.stop()
+  } catch {
+    /* ignore */
+  }
+  current.stream.getTracks().forEach((track) => track.stop())
+}
+
+/** Start hold-to-talk Web Speech recognition (mobile path). */
+export function startHoldSpeech(lang = 'en-US'): void {
+  if (activeRecognition) return
+  const recognition = createRecognition()
+  recognition.lang = lang
+  recognition.interimResults = true
+  recognition.maxAlternatives = 1
+  recognition.continuous = true
+  recognitionTranscript = ''
+
+  recognition.onresult = (event) => {
+    const parts: string[] = []
+    for (let i = 0; i < event.results.length; i += 1) {
+      const row = event.results[i]
+      if (row?.[0]?.transcript) parts.push(row[0].transcript)
+    }
+    recognitionTranscript = parts.join(' ').trim()
+  }
+  recognition.onerror = () => {
+    /* resolved on stop */
+  }
+  recognition.onend = () => {
+    /* resolved on stop */
+  }
+
+  activeRecognition = recognition
+  recognition.start()
+}
+
+/** Stop hold-to-talk speech and return transcript. */
+export async function stopHoldSpeech(): Promise<string> {
+  const recognition = activeRecognition
+  if (!recognition) throw new Error('Not listening')
+  activeRecognition = null
+
+  await new Promise<void>((resolve) => {
+    const prev = recognition.onend
+    recognition.onend = () => {
+      prev?.()
+      resolve()
+    }
+    try {
+      recognition.stop()
+    } catch {
+      resolve()
+    }
+    window.setTimeout(() => resolve(), 800)
+  })
+
+  const text = recognitionTranscript.trim()
+  recognitionTranscript = ''
+  if (!text) throw new Error('No speech detected')
+  return text
+}
+
+export async function cancelHoldSpeech(): Promise<void> {
+  const recognition = activeRecognition
+  if (!recognition) return
+  activeRecognition = null
+  recognitionTranscript = ''
+  try {
+    recognition.abort()
+  } catch {
+    /* ignore */
+  }
+}
+
+/** @deprecated Prefer startHoldRecording/stopHoldRecording */
+export async function recordAudioBlob(durationMs = 6000): Promise<Blob> {
+  await startHoldRecording()
+  await new Promise((resolve) => window.setTimeout(resolve, durationMs))
+  return stopHoldRecording()
 }
 
 /** Decode a recorded Blob into an AudioBuffer for the Prompt API. */
@@ -156,7 +279,6 @@ export async function decodeAudioBlob(blob: Blob): Promise<AudioBuffer> {
   const ctx = new Ctx()
   try {
     const bytes = await blob.arrayBuffer()
-    // decodeAudioData may detach the buffer; pass a copy
     return await ctx.decodeAudioData(bytes.slice(0))
   } catch {
     throw new Error('Could not decode recorded audio for AI')

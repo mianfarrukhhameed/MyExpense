@@ -42,6 +42,8 @@ import {
 } from '../../db/sync-queue.repo'
 import {
   getLastPullAt,
+  isExpenseSyncDeferred,
+  isProfileSyncDeferred,
   notifyDataSynced,
   setLastPullAt,
   setLastSyncAt,
@@ -346,6 +348,11 @@ async function flushMonthBudgetDelete(id: string): Promise<void> {
 }
 
 async function flushProfile(profile: Profile, userId: string): Promise<void> {
+  if (isProfileSyncDeferred()) {
+    // User chose Cancel on a stale conflict — do not push profile
+    return
+  }
+
   const { data: remoteRow, error: readError } = await getSupabase()
     .from('profiles')
     .select('monthly_budget, currency, fcm_token, updated_at')
@@ -361,9 +368,10 @@ async function flushProfile(profile: Profile, userId: string): Promise<void> {
     const remoteHasSettings =
       Number(remote.monthly_budget) !== DEFAULT_MONTHLY_BUDGET ||
       remote.currency !== DEFAULT_CURRENCY
-    const remoteNewer = remote.updated_at > profile.updated_at
+    // Remote wins on tie or newer — never overwrite cloud with older local
+    const remoteNewerOrEqual = remote.updated_at >= profile.updated_at
 
-    if (remoteNewer || (localIsDefault && remoteHasSettings)) {
+    if (remoteNewerOrEqual || (localIsDefault && remoteHasSettings)) {
       await upsertProfile({
         id: userId,
         monthly_budget: Number(remote.monthly_budget),
@@ -412,12 +420,24 @@ export async function flushQueue(): Promise<{ flushed: number; errors: string[] 
       if (item.entity === 'expense') {
         if (item.operation === 'delete') {
           const payload = item.payload as { id: string; receipt_url?: string | null }
+          if (isExpenseSyncDeferred(payload.id)) {
+            await removeSyncItem(item.id)
+            continue
+          }
           await flushExpenseDelete(payload.id, payload.receipt_url)
         } else {
           const expense = item.payload as Expense
+          if (isExpenseSyncDeferred(expense.id)) {
+            await removeSyncItem(item.id)
+            continue
+          }
           await flushExpenseCreateOrUpdate(expense, user.id)
         }
       } else if (item.entity === 'profile') {
+        if (isProfileSyncDeferred()) {
+          await removeSyncItem(item.id)
+          continue
+        }
         const profile = item.payload as Profile
         await flushProfile(profile, user.id)
       } else if (item.entity === 'receipt') {
@@ -515,6 +535,7 @@ export async function pullRemoteChanges(): Promise<{ pulled: number }> {
     user.id,
     watermark,
     async (row) => {
+      if (isExpenseSyncDeferred(row.id)) return false
       const local = await getExpenseById(row.id)
       if (!local || local.updated_at < row.updated_at) {
         await upsertExpense(fromRemoteExpense(row))
@@ -574,7 +595,7 @@ export async function pullRemoteChanges(): Promise<{ pulled: number }> {
 
   if (profileError) throw profileError
 
-  if (remoteProfile) {
+  if (remoteProfile && !isProfileSyncDeferred()) {
     const remote = remoteProfile as RemoteProfile
     const local = await getProfile()
     if (local.updated_at < remote.updated_at || local.id !== remote.id) {
